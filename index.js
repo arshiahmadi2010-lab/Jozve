@@ -317,6 +317,60 @@ async function adminStats(env, chatId, msgId) {
   return show(env, chatId, msgId, text, kb([[btn('🔙 پنل مدیریت', 'a:panel')]]));
 }
 
+/* ───────────── آپدیت (جایگزینی) جزوه‌ی موجود ───────────── */
+const upBackKb = kb([[btn('🔙 بازگشت', 'a:uv')]]);
+
+async function getUpState(env, uid) {
+  const st = await getState(env, uid);
+  return st && ['add_cat', 'up_edit', 'up_title', 'up_tags'].includes(st.name) && st.data.file ? st : null;
+}
+
+async function viewAddCat(env, chatId, msgId, title) {
+  const { rows } = await catButtons(env, 'a:ac:');
+  rows.push([btn('🔄 آپدیت جزوه موجود (جایگزینی فایل)', 'a:up')]);
+  rows.push([btn('❌ انصراف', 'a:cancel')]);
+  return show(env, chatId, msgId,
+    `✅ فایل دریافت شد.\n📄 نام: <b>${esc(title)}</b>\n\n📂 برای <b>جزوه‌ی جدید</b> دسته‌بندی را انتخاب کنید،\nیا برای جایگزینی یک جزوه‌ی قدیمی «آپدیت» را بزنید:`,
+    kb(rows));
+}
+
+async function upList(env, chatId, msgId, catId, page) {
+  const cat = await getCat(env, catId);
+  if (!cat) return show(env, chatId, msgId, '⚠️ دسته‌بندی پیدا نشد.', kb([[btn('🔙 بازگشت', 'a:up')]]));
+  const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes WHERE category_id=?').bind(catId).first()).c;
+  page = clampPage(page, total);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const { results } = await env.DB.prepare('SELECT id,title FROM notes WHERE category_id=? ORDER BY id DESC LIMIT ? OFFSET ?')
+    .bind(catId, PAGE_SIZE, page * PAGE_SIZE).all();
+  const rows = results.map((n) => [btn('📄 ' + trunc(n.title, 50), `a:us:${n.id}`)]);
+  rows.push(...pager(page, pages, `a:ul:${catId}:`));
+  rows.push([btn('🔙 دسته‌ها', 'a:up')]);
+  rows.push([btn('❌ انصراف', 'a:cancel')]);
+  const text = `🔄 <b>آپدیت جزوه</b>\n📂 ${esc(cat.name)}\n\n` +
+    (total ? 'جزوه‌ای را که باید با فایل جدید جایگزین شود انتخاب کنید:' : 'در این دسته جزوه‌ای وجود ندارد.');
+  return show(env, chatId, msgId, text, kb(rows));
+}
+
+async function upSummary(env, chatId, msgId, d) {
+  const old = await getNote(env, d.noteId);
+  if (!old) return show(env, chatId, msgId, '⚠️ جزوه‌ی قدیمی پیدا نشد.', kb([[btn('🛠 پنل مدیریت', 'a:panel')]]));
+  const cat = await getCat(env, d.cat);
+  const text =
+    `🔄 <b>آپدیت جزوه</b>\n\n` +
+    `📄 جزوه‌ی قدیمی: ${esc(old.title)}\n` +
+    `📎 فایل جدید: ${TYPE_LABEL[d.file.file_type] || 'فایل'} — ${fmtSize(d.file.file_size)}\n\n` +
+    `<b>مشخصات بعد از آپدیت:</b>\n` +
+    `✏️ نام: ${esc(d.title)}\n📂 دسته: ${esc(cat ? cat.name : '—')}\n🏷 هشتگ‌ها: ${esc(d.hashtags || '—')}\n\n` +
+    `فایل قدیمی با فایل جدید جایگزین می‌شود و کپشن کانال هم با این مشخصات ساخته می‌شود.`;
+  return show(env, chatId, msgId, text, kb([
+    [btn('✅ تأیید و جایگزینی', 'a:uok')],
+    [btn('✏️ تغییر نام', 'a:ut'), btn('🏷 تغییر هشتگ', 'a:uh')],
+    [btn('📂 تغییر دسته', 'a:uk')],
+    [btn('🔙 انتخاب جزوه‌ی دیگر', `a:ul:${old.category_id}:0`)],
+    [btn('❌ انصراف', 'a:cancel')],
+  ]));
+}
+
 /* ───────────── ورود مدیر ───────────── */
 async function getLock(env, uid) {
   const r = await env.DB.prepare('SELECT data FROM states WHERE user_id=?').bind('lock:' + uid).first();
@@ -413,9 +467,7 @@ async function onAdminState(env, m, uid, st, text) {
       if (!f) return sendText(env, chatId, '⚠️ لطفاً خود فایل جزوه را ارسال کنید.', cancelKb);
       const title = guessTitle(m, f);
       await setState(env, uid, 'add_cat', { file: f, title });
-      const { rows } = await catButtons(env, 'a:ac:');
-      rows.push([btn('❌ انصراف', 'a:cancel')]);
-      return sendText(env, chatId, `✅ فایل دریافت شد.\n📄 نام: <b>${esc(title)}</b>\n\n📂 دسته‌بندی را انتخاب کنید:`, kb(rows));
+      return viewAddCat(env, chatId, null, title);
     }
     case 'add_cat':
       return sendText(env, chatId, '📂 لطفاً دسته‌بندی را از دکمه‌ها انتخاب کنید.', cancelKb);
@@ -451,6 +503,21 @@ async function onAdminState(env, m, uid, st, text) {
       await sendText(env, chatId, '✅ فایل جایگزین شد.');
       return adminNote(env, chatId, null, d.id);
     }
+    case 'up_title': {
+      const title = trunc(norm(text), 150);
+      if (!title) return sendText(env, chatId, '⚠️ نام معتبر ارسال کنید.', upBackKb);
+      const nd = { ...d, title };
+      await setState(env, uid, 'up_edit', nd);
+      return upSummary(env, chatId, null, nd);
+    }
+    case 'up_tags': {
+      if (!text) return sendText(env, chatId, '⚠️ هشتگ‌ها را به‌صورت متن ارسال کنید.', upBackKb);
+      const nd = { ...d, hashtags: parseTags(text) };
+      await setState(env, uid, 'up_edit', nd);
+      return upSummary(env, chatId, null, nd);
+    }
+    case 'up_edit':
+      return upSummary(env, chatId, null, d);
     case 'cat_add': {
       const name = trunc(norm(text), 40);
       if (!name) return sendText(env, chatId, '⚠️ نام معتبر ارسال کنید.', cancelKb);
@@ -600,6 +667,106 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       }
       await ack('🗑 حذف شد');
       return adminNotes(env, chatId, msgId, 0);
+    }
+
+    /* آپدیت (جایگزینی) جزوه‌ی موجود با فایل جدید */
+    case 'up': {
+      const st = await getUpState(env, uid);
+      if (!st) return ack('⏱ عملیات منقضی شده است. دوباره فایل را ارسال کنید.', true);
+      await ack();
+      if (st.name !== 'add_cat') await setState(env, uid, 'add_cat', { file: st.data.file, title: st.data.origTitle || st.data.title });
+      const { rows } = await catButtons(env, 'a:uc:');
+      rows.push([btn('🔙 بازگشت', 'a:ubk')]);
+      return show(env, chatId, msgId, '🔄 <b>آپدیت جزوه</b>\n\nدسته‌بندی جزوه‌ی قدیمی را انتخاب کنید:', kb(rows));
+    }
+    case 'ubk': {
+      const st = await getUpState(env, uid);
+      if (!st) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      const title = st.data.origTitle || st.data.title;
+      await setState(env, uid, 'add_cat', { file: st.data.file, title });
+      return viewAddCat(env, chatId, msgId, title);
+    }
+    case 'uc':
+    case 'ul': {
+      const st = await getUpState(env, uid);
+      if (!st) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      return upList(env, chatId, msgId, id, p[1] === 'ul' ? num(3) : 0);
+    }
+    case 'us': {
+      const st = await getUpState(env, uid);
+      if (!st) return ack('⏱ عملیات منقضی شده است.', true);
+      const old = await getNote(env, id);
+      if (!old) return ack('⚠️ جزوه پیدا نشد.', true);
+      await ack();
+      const data = {
+        file: st.data.file, origTitle: st.data.origTitle || st.data.title,
+        noteId: id, title: old.title, hashtags: old.hashtags, cat: old.category_id,
+      };
+      await setState(env, uid, 'up_edit', data);
+      return upSummary(env, chatId, msgId, data);
+    }
+    case 'uv': {
+      const st = await getUpState(env, uid);
+      if (!st || !st.data.noteId) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      await setState(env, uid, 'up_edit', st.data);
+      return upSummary(env, chatId, msgId, st.data);
+    }
+    case 'ut':
+    case 'uh': {
+      const st = await getUpState(env, uid);
+      if (!st || !st.data.noteId) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      await setState(env, uid, p[1] === 'ut' ? 'up_title' : 'up_tags', st.data);
+      return show(env, chatId, msgId,
+        p[1] === 'ut' ? '✏️ نام جدید جزوه را ارسال کنید:' : '🏷 هشتگ‌های جدید را ارسال کنید.\nبرای حذف همه‌ی هشتگ‌ها <code>-</code> بفرستید.',
+        upBackKb);
+    }
+    case 'uk': {
+      const st = await getUpState(env, uid);
+      if (!st || !st.data.noteId) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      const { rows } = await catButtons(env, 'a:usc:');
+      rows.push([btn('🔙 بازگشت', 'a:uv')]);
+      return show(env, chatId, msgId, '📂 دسته‌بندی جدید جزوه را انتخاب کنید:', kb(rows));
+    }
+    case 'usc': {
+      const st = await getUpState(env, uid);
+      if (!st || !st.data.noteId) return ack('⏱ عملیات منقضی شده است.', true);
+      const cat = await getCat(env, id);
+      if (!cat) return ack('⚠️ دسته‌بندی پیدا نشد.', true);
+      await ack();
+      const nd = { ...st.data, cat: id };
+      await setState(env, uid, 'up_edit', nd);
+      return upSummary(env, chatId, msgId, nd);
+    }
+    case 'uok': {
+      const st = await getUpState(env, uid);
+      if (!st || st.name !== 'up_edit') return ack('⏱ عملیات منقضی شده است.', true);
+      const d = st.data;
+      const old = await getNote(env, d.noteId);
+      const cat = await getCat(env, d.cat);
+      if (!old || !cat) return ack('⚠️ جزوه یا دسته‌بندی پیدا نشد.', true);
+      const f = d.file;
+      // اول فایل جدید به کانال ارسال می‌شود
+      const r = await sendFile(env, env.CHANNEL_ID, { ...f, title: d.title, hashtags: d.hashtags }, cat.name);
+      if (!r.ok) {
+        await ack();
+        return show(env, chatId, msgId, `⚠️ ارسال به کانال ناموفق بود:\n<code>${esc(r.description || '')}</code>`,
+          kb([[btn('🔁 تلاش مجدد', 'a:uok')], [btn('❌ انصراف', 'a:cancel')]]));
+      }
+      await env.DB.prepare(
+        'UPDATE notes SET title=?,hashtags=?,category_id=?,file_id=?,file_unique_id=?,file_type=?,file_name=?,file_size=?,channel_message_id=?,updated_at=? WHERE id=?'
+      ).bind(d.title, d.hashtags, cat.id, f.file_id, f.file_unique_id || '', f.file_type, f.file_name || '', f.file_size || 0, r.result.message_id, now(), old.id).run();
+      // بعد پیام قبلی حذف می‌شود
+      if (old.channel_message_id) await tg(env, 'deleteMessage', { chat_id: env.CHANNEL_ID, message_id: old.channel_message_id });
+      await clearState(env, uid);
+      await ack('✅ جزوه آپدیت شد');
+      return show(env, chatId, msgId,
+        `✅ <b>جزوه آپدیت شد</b>\n\n📄 ${esc(d.title)}\n📂 ${esc(cat.name)}\n🏷 ${esc(d.hashtags || '—')}`,
+        kb([[btn('📄 مشاهده‌ی جزوه', `a:n:${old.id}:0`)], [btn('➕ افزودن جزوه', 'a:add'), btn('🛠 پنل', 'a:panel')]]));
     }
 
     /* مدیریت دسته‌بندی‌ها */
