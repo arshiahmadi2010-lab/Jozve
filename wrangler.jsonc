@@ -1,0 +1,12 @@
+{
+  "name": "jozve",
+  "main": "index.js",
+  "compatibility_date": "2026-09-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "jozve-db",
+      "database_id": "a4983a27-bad9-40da-8b18-21572ec7d82e"
+    }
+  ]
+}
