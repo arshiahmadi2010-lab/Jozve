@@ -1,5 +1,5 @@
 /**
- * 📚 ربات کتابخانه جزوه — Cloudflare Workers + D1
+ * 📚 ربات کتابخان جزوه — Cloudflare Workers + D1
  *
  * Secrets : BOT_TOKEN, CHANNEL_ID, ADMIN_PASSWORD
  * Binding : DB (D1)
