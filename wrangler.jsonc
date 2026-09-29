@@ -8,5 +8,6 @@
       "database_name": "jozve-db",
       "database_id": "a4983a27-bad9-40da-8b18-21572ec7d82e"
     }
-  ]
+  ],
+  "triggers": { "crons": ["0 0,5,10,15,20 * * *"] }
 }
