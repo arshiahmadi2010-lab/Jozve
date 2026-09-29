@@ -1,3 +1,4 @@
+
 /**
  * 📚 ربات کتابخانه جزوه — Cloudflare Workers + D1
  *
@@ -6,6 +7,10 @@
  *
  * جدول‌ها به‌صورت خودکار ساخته می‌شوند. بعد از Deploy این آدرس را یک‌بار باز کنید:
  *   https://<worker>.workers.dev/setup?key=<ADMIN_PASSWORD>
+ *
+ * برای تابلوی امتحانات، یک Cron Trigger هم لازم است (راهنما در پیام همراه کد).
+ * برای تست دستی بدون منتظر ماندن برای Cron:
+ *   https://<worker>.workers.dev/cron?key=<ADMIN_PASSWORD>
  */
 
 const PAGE_SIZE = 8;
@@ -18,6 +23,8 @@ const ICONS = { 'زیست': '🧬', 'فیزیک': '⚛️', 'ریاضی': '📐'
 const METHOD = { document: 'sendDocument', photo: 'sendPhoto', video: 'sendVideo', audio: 'sendAudio' };
 const FIELD = { document: 'document', photo: 'photo', video: 'video', audio: 'audio' };
 const TYPE_LABEL = { document: 'فایل', photo: 'تصویر', video: 'ویدیو', audio: 'صوت' };
+const TEHRAN_OFFSET_MIN = 210; // آفست ثابت ایران +03:30 (بدون تغییر ساعت تابستانی از ۱۴۰۱)
+const EXAM_STATUS_ICON = { scheduled: '🕓', published: '🟢', held: '✅', cancelled: '🚫' };
 
 /* ───────────── ابزارهای عمومی ───────────── */
 const now = () => Math.floor(Date.now() / 1000);
@@ -47,6 +54,54 @@ function parseTags(text) {
   });
   return [...seen].slice(0, 15).join(' ');
 }
+/* ───────────── تقویم شمسی ───────────── */
+function jalaliToGregorian(jy, jm, jd) {
+  jy = jy - 979; jm = jm - 1; jd = jd - 1;
+  let jDayNo = 365 * jy + Math.floor(jy / 33) * 8 + Math.floor(((jy % 33) + 3) / 4);
+  for (let i = 0; i < jm; i++) jDayNo += i < 6 ? 31 : 30;
+  jDayNo += jd;
+  let gDayNo = jDayNo + 79;
+  let gy = 1600 + 400 * Math.floor(gDayNo / 146097);
+  gDayNo %= 146097;
+  let leap = true;
+  if (gDayNo >= 36525) {
+    gDayNo--;
+    gy += 100 * Math.floor(gDayNo / 36524);
+    gDayNo %= 36524;
+    if (gDayNo >= 365) gDayNo++;
+    else leap = false;
+  }
+  gy += 4 * Math.floor(gDayNo / 1461);
+  gDayNo %= 1461;
+  if (gDayNo >= 366) {
+    leap = false;
+    gDayNo--;
+    gy += Math.floor(gDayNo / 365);
+    gDayNo %= 365;
+  }
+  const gDaysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let gm = 0;
+  while (gm < 12 && gDayNo >= gDaysInMonth[gm]) { gDayNo -= gDaysInMonth[gm]; gm++; }
+  return [gy, gm + 1, gDayNo + 1];
+}
+function parseJalaliInput(text) {
+  const s = norm(text).replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+  const m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/);
+  if (!m) return null;
+  const jy = +m[1], jm = +m[2], jd = +m[3];
+  const hh = m[4] !== undefined ? +m[4] : 8, mi = m[5] !== undefined ? +m[5] : 0;
+  if (jm < 1 || jm > 12 || jd < 1 || jd > 31 || hh > 23 || mi > 59) return null;
+  const [gy, gm, gd] = jalaliToGregorian(jy, jm, jd);
+  const utcMs = Date.UTC(gy, gm - 1, gd, hh, mi, 0) - TEHRAN_OFFSET_MIN * 60000;
+  const ts = Math.floor(utcMs / 1000);
+  return Number.isFinite(ts) ? ts : null;
+}
+function fmtJalali(ts) {
+  try {
+    return new Intl.DateTimeFormat('fa-IR-u-ca-persian', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tehran' }).format(new Date(ts * 1000));
+  } catch { return fmtDate(ts); }
+}
+
 async function sha256hex(s) {
   const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -92,7 +147,10 @@ async function initDb(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS admin_sessions (user_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, first_name TEXT, username TEXT, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, starts INTEGER NOT NULL DEFAULT 0, downloads INTEGER NOT NULL DEFAULT 0)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS downloads (id INTEGER PRIMARY KEY AUTOINCREMENT, note_id INTEGER NOT NULL, user_id TEXT NOT NULL, ts INTEGER NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', exam_at INTEGER NOT NULL, publish_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'scheduled', confirm_pending INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_notes_cat ON notes(category_id)`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_exams_status ON exams(status)`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_exams_examat ON exams(exam_at)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_dl_note ON downloads(note_id)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_dl_user ON downloads(user_id)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_users_seen ON users(last_seen)`),
@@ -296,6 +354,7 @@ function viewPanel(env, chatId, msgId) {
     [btn('➕ افزودن جزوه', 'a:add')],
     [btn('📚 مدیریت جزوه‌ها', 'a:nl:0')],
     [btn('📂 مدیریت دسته‌بندی‌ها', 'a:cl')],
+    [btn('🗓 امتحانات و آزمون‌ها', 'a:ex')],
     [btn('📊 آمار', 'a:st')],
     [btn('🏠 نمای کاربران', 'u:home'), btn('🚪 خروج', 'a:lo')],
   ]));
@@ -460,6 +519,126 @@ async function upSummary(env, chatId, msgId, d) {
     [btn('🔙 انتخاب جزوه‌ی دیگر', `a:ul:${old.category_id}:0`)],
     [btn('❌ انصراف', 'a:cancel')],
   ]));
+}
+
+/* ───────────── امتحانات و آزمون‌ها (تابلوی کانال) ───────────── */
+async function getBoardMsgId(env) {
+  const r = await env.DB.prepare(`SELECT data FROM states WHERE user_id='meta:examboard'`).first();
+  if (!r) return null;
+  try { return JSON.parse(r.data).message_id || null; } catch { return null; }
+}
+async function setBoardMsgId(env, msgId) {
+  const t = now();
+  await env.DB.prepare(
+    `INSERT INTO states(user_id,state,data,updated_at) VALUES('meta:examboard','board',?,?)
+     ON CONFLICT(user_id) DO UPDATE SET data=?,updated_at=?`
+  ).bind(JSON.stringify({ message_id: msgId }), t, JSON.stringify({ message_id: msgId }), t).run();
+}
+function examLine(e, t) {
+  const dateStr = fmtJalali(e.exam_at);
+  if (e.status === 'held') {
+    return `✅ <s>${esc(e.title)}</s>\n🗓 ${dateStr} — برگزار شد` + (e.note ? `\n📝 ${esc(e.note)}` : '');
+  }
+  let statusLine;
+  if (e.confirm_pending) statusLine = '⏳ در انتظار تایید نتیجه';
+  else {
+    const days = Math.floor((e.exam_at - t) / 86400);
+    if (e.exam_at <= t) statusLine = '🔥 امروز!';
+    else if (days === 0) statusLine = '🔥 امروز!';
+    else if (days === 1) statusLine = '⏰ فردا';
+    else statusLine = `⏳ ${fa(days)} روز مانده`;
+  }
+  return `📌 <b>${esc(e.title)}</b>\n🗓 ${dateStr} — ${statusLine}` + (e.note ? `\n📝 ${esc(e.note)}` : '');
+}
+async function renderBoard(env) {
+  const t = now();
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM exams WHERE status IN ('published','held') ORDER BY (status='held') ASC, exam_at ASC`
+  ).all();
+  const body = results.length ? results.map((e) => examLine(e, t)).join('\n\n') : '🎉 فعلاً امتحان یا آزمونی در پیش نیست.';
+  const text = `🗓 <b>تابلوی امتحانات و آزمون‌ها</b>\n<i>آخرین به‌روزرسانی: ${fmtJalali(t)}</i>\n\n${body}`;
+  const msgId = await getBoardMsgId(env);
+  if (msgId) {
+    const r = await tg(env, 'editMessageText', { chat_id: env.CHANNEL_ID, message_id: msgId, text, parse_mode: 'HTML' });
+    if (r.ok || /not modified/i.test(r.description || '')) return;
+  }
+  const r2 = await tg(env, 'sendMessage', { chat_id: env.CHANNEL_ID, text, parse_mode: 'HTML' });
+  if (r2.ok) await setBoardMsgId(env, r2.result.message_id);
+}
+
+const examCancelKb = kb([[btn('❌ انصراف', 'a:cancel')]]);
+
+async function finalizeExam(env, chatId, uid, d, publishAt) {
+  const t = now();
+  const status = publishAt <= t ? 'published' : 'scheduled';
+  await env.DB.prepare(
+    'INSERT INTO exams(title,note,exam_at,publish_at,status,confirm_pending,created_at,updated_at) VALUES(?,?,?,?,?,0,?,?)'
+  ).bind(d.title, d.note || '', d.exam_at, publishAt, status, t, t).run();
+  await clearState(env, uid);
+  if (status === 'published') await renderBoard(env);
+  const when = status === 'published'
+    ? 'از همین الان توی تابلوی کانال نمایش داده می‌شود.'
+    : `از تاریخ ${fmtJalali(publishAt)} توی تابلوی کانال نمایش داده می‌شود.`;
+  return sendText(env, chatId,
+    `✅ <b>امتحان ثبت شد</b>\n\n📌 ${esc(d.title)}\n🗓 ${fmtJalali(d.exam_at)}` + (d.note ? `\n📝 ${esc(d.note)}` : '') + `\n\n📢 ${when}`,
+    kb([[btn('➕ افزودن امتحان دیگر', 'a:ea')], [btn('🗓 امتحانات و آزمون‌ها', 'a:ex')], [btn('🛠 پنل مدیریت', 'a:panel')]]));
+}
+
+async function examMenu(env, chatId, msgId) {
+  const [pend, upcoming] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) AS c FROM exams WHERE confirm_pending=1").first(),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM exams WHERE status IN ('scheduled','published')").first(),
+  ]);
+  const rows = [];
+  if (pend.c) rows.push([btn(`⏳ نیازمند تایید نتیجه (${fa(pend.c)})`, 'a:el:0')]);
+  rows.push([btn('➕ افزودن امتحان', 'a:ea')]);
+  rows.push([btn('📋 لیست و مدیریت', 'a:el:0')]);
+  rows.push([btn('🔙 پنل مدیریت', 'a:panel')]);
+  const text = `🗓 <b>امتحانات و آزمون‌ها</b>\n\n📌 در انتظار انتشار/برگزاری: ${fa(upcoming.c)}` +
+    (pend.c ? `\n⏳ نیازمند تایید نتیجه: ${fa(pend.c)}` : '') +
+    `\n\nاین بخش فقط برای شماست؛ کاربران عادی چیزی از این نمی‌بینند. نتیجه‌ی نهایی به‌صورت یک پیام ثابت در کانال منتشر و آپدیت می‌شود.`;
+  return show(env, chatId, msgId, text, kb(rows));
+}
+
+async function examList(env, chatId, msgId, page) {
+  const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM exams').first()).c;
+  page = clampPage(page, total);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const { results } = await env.DB.prepare(
+    'SELECT id,title,exam_at,status,confirm_pending FROM exams ORDER BY confirm_pending DESC, exam_at ASC LIMIT ? OFFSET ?'
+  ).bind(PAGE_SIZE, page * PAGE_SIZE).all();
+  const rows = results.map((e) => {
+    const ic = e.confirm_pending ? '⏳' : (EXAM_STATUS_ICON[e.status] || '📌');
+    return [btn(`${ic} ${trunc(e.title, 40)} — ${fmtJalali(e.exam_at)}`, `a:ed:${e.id}`)];
+  });
+  rows.push(...pager(page, pages, 'a:el:'));
+  rows.push([btn('🔙 امتحانات و آزمون‌ها', 'a:ex')]);
+  const text = `📋 <b>لیست امتحانات</b>\n📄 مجموع: ${fa(total)}` + (total ? '' : '\n\nهنوز امتحانی ثبت نشده است.');
+  return show(env, chatId, msgId, text, kb(rows));
+}
+
+async function examDetail(env, chatId, msgId, id) {
+  const e = await env.DB.prepare('SELECT * FROM exams WHERE id=?').bind(id).first();
+  if (!e) return show(env, chatId, msgId, '⚠️ امتحان پیدا نشد.', kb([[btn('🔙 لیست', 'a:el:0')]]));
+  const statusLabel = { scheduled: '🕓 در انتظار انتشار در کانال', published: '🟢 منتشرشده (در تابلوی کانال)', held: '✅ برگزار شده', cancelled: '🚫 لغوشده' }[e.status] || e.status;
+  let text = `📌 <b>${esc(e.title)}</b>\n\n🗓 تاریخ امتحان: ${fmtJalali(e.exam_at)}\n📢 وضعیت: ${statusLabel}`;
+  if (e.status === 'scheduled') text += `\n🚀 زمان شروع انتشار: ${fmtJalali(e.publish_at)}`;
+  if (e.note) text += `\n📝 توضیح: ${esc(e.note)}`;
+  if (e.confirm_pending) text += `\n\n⏳ <b>زمان این امتحان گذشته و نیاز به تایید نتیجه دارد:</b>`;
+  const rows = [];
+  if (e.confirm_pending) {
+    rows.push([btn('✅ برگزار شد', `a:cf:held:${id}`)]);
+    rows.push([btn('🔄 تاریخ عوض شد', `a:cf:resch:${id}`)]);
+    rows.push([btn('❌ برگزار نشد', `a:cf:no:${id}`)]);
+  } else if (e.status !== 'cancelled' && e.status !== 'held') {
+    rows.push([btn('✏️ تغییر عنوان', `a:et:${id}`), btn('🗓 تغییر تاریخ', `a:edt:${id}`)]);
+    rows.push([btn('📝 تغییر توضیح', `a:en:${id}`)]);
+    if (e.status === 'scheduled') rows.push([btn('🚀 تغییر زمان انتشار', `a:epd:${id}`)]);
+    rows.push([btn('🚫 لغو امتحان', `a:ec:${id}`)]);
+  }
+  rows.push([btn('🗑 حذف کامل', `a:edel:${id}`)]);
+  rows.push([btn('🔙 لیست', 'a:el:0')]);
+  return show(env, chatId, msgId, text, kb(rows));
 }
 
 /* ───────────── ورود مدیر ───────────── */
@@ -629,6 +808,73 @@ async function onAdminState(env, m, uid, st, text) {
       await clearState(env, uid);
       return adminCats(env, chatId, null);
     }
+    case 'exam_title': {
+      const title = trunc(norm(text), 150);
+      if (!title) return sendText(env, chatId, '⚠️ عنوان معتبر ارسال کنید.', examCancelKb);
+      await setState(env, uid, 'exam_date', { title });
+      return sendText(env, chatId, '🗓 تاریخ و ساعت امتحان را به شمسی ارسال کنید.\nمثال: <code>1404/07/15 09:00</code>', examCancelKb);
+    }
+    case 'exam_date': {
+      const ts = parseJalaliInput(text);
+      if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/15 09:00</code>', examCancelKb);
+      await setState(env, uid, 'exam_note', { ...d, exam_at: ts });
+      return sendText(env, chatId, '📝 توضیح اختیاری (مثلاً بخش یا سرفصل امتحان) را ارسال کنید:', kb([[btn('⏭ رد کن', 'a:easn')], [btn('❌ انصراف', 'a:cancel')]]));
+    }
+    case 'exam_note': {
+      const note = trunc(norm(text), 300);
+      await setState(env, uid, 'exam_pub', { ...d, note });
+      return sendText(env, chatId, '🚀 از چه زمانی این امتحان توی تابلوی کانال نمایش داده بشه و آپدیت بخوره؟',
+        kb([[btn('🔴 همین الان', 'a:eapn')], [btn('🗓 تاریخ خاص', 'a:eapl')], [btn('❌ انصراف', 'a:cancel')]]));
+    }
+    case 'exam_pubdate': {
+      const ts = parseJalaliInput(text);
+      if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/10 08:00</code>', examCancelKb);
+      return finalizeExam(env, chatId, uid, d, ts);
+    }
+    case 'exam_reschedule': {
+      const ts = parseJalaliInput(text);
+      if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/20 09:00</code>', examCancelKb);
+      await env.DB.prepare("UPDATE exams SET exam_at=?,confirm_pending=0,status='published',updated_at=? WHERE id=?").bind(ts, now(), d.id).run();
+      await clearState(env, uid);
+      await renderBoard(env);
+      await sendText(env, chatId, '✅ تاریخ امتحان به‌روزرسانی شد.');
+      return examDetail(env, chatId, null, d.id);
+    }
+    case 'exam_edit_title': {
+      const title = trunc(norm(text), 150);
+      if (!title) return sendText(env, chatId, '⚠️ عنوان معتبر ارسال کنید.', examCancelKb);
+      const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
+      await env.DB.prepare('UPDATE exams SET title=?,updated_at=? WHERE id=?').bind(title, now(), d.id).run();
+      await clearState(env, uid);
+      if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
+      return examDetail(env, chatId, null, d.id);
+    }
+    case 'exam_edit_date': {
+      const ts = parseJalaliInput(text);
+      if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/20 09:00</code>', examCancelKb);
+      const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
+      await env.DB.prepare('UPDATE exams SET exam_at=?,confirm_pending=0,updated_at=? WHERE id=?').bind(ts, now(), d.id).run();
+      await clearState(env, uid);
+      if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
+      return examDetail(env, chatId, null, d.id);
+    }
+    case 'exam_edit_note': {
+      const note = text.trim() === '-' ? '' : trunc(norm(text), 300);
+      const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
+      await env.DB.prepare('UPDATE exams SET note=?,updated_at=? WHERE id=?').bind(note, now(), d.id).run();
+      await clearState(env, uid);
+      if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
+      return examDetail(env, chatId, null, d.id);
+    }
+    case 'exam_edit_pubdate': {
+      const ts = parseJalaliInput(text);
+      if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/12 08:00</code>', examCancelKb);
+      const status = ts <= now() ? 'published' : 'scheduled';
+      await env.DB.prepare('UPDATE exams SET publish_at=?,status=?,updated_at=? WHERE id=?').bind(ts, status, now(), d.id).run();
+      await clearState(env, uid);
+      if (status === 'published') await renderBoard(env);
+      return examDetail(env, chatId, null, d.id);
+    }
     default:
       await clearState(env, uid);
   }
@@ -702,6 +948,88 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
     case 'st': await ack(); return adminStats(env, chatId, msgId);
     case 'ux': await ack(); return adminUsers(env, chatId, msgId, id);
     case 'nd': await ack(); return adminNoteDownloaders(env, chatId, msgId, id, num(3));
+
+    /* امتحانات و آزمون‌ها */
+    case 'ex': await ack(); await clearState(env, uid); return examMenu(env, chatId, msgId);
+    case 'ea':
+      return prompt('exam_title', {}, '➕ <b>افزودن امتحان/آزمون</b>\n\n📝 عنوان را ارسال کنید (مثلاً «امتحان فصل ۳ فیزیک»):');
+    case 'easn': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'exam_note') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      await setState(env, uid, 'exam_pub', { ...st.data, note: '' });
+      return show(env, chatId, msgId, '🚀 از چه زمانی این امتحان توی تابلوی کانال نمایش داده بشه و آپدیت بخوره؟',
+        kb([[btn('🔴 همین الان', 'a:eapn')], [btn('🗓 تاریخ خاص', 'a:eapl')], [btn('❌ انصراف', 'a:cancel')]]));
+    }
+    case 'eapn': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'exam_pub') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      return finalizeExam(env, chatId, uid, st.data, now());
+    }
+    case 'eapl': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'exam_pub') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      await setState(env, uid, 'exam_pubdate', st.data);
+      return show(env, chatId, msgId, '🗓 از چه تاریخی (شمسی) شروع کنم به نمایش و آپدیتش توی کانال؟\nمثال: <code>1404/07/10 08:00</code>', examCancelKb);
+    }
+    case 'el': await ack(); await clearState(env, uid); return examList(env, chatId, msgId, id);
+    case 'ed': await ack(); await clearState(env, uid); return examDetail(env, chatId, msgId, id);
+    case 'et': return prompt('exam_edit_title', { id }, '✏️ عنوان جدید امتحان را ارسال کنید:');
+    case 'edt': return prompt('exam_edit_date', { id }, '🗓 تاریخ و ساعت جدید (شمسی) را ارسال کنید:\nمثال: <code>1404/07/20 09:00</code>');
+    case 'en': return prompt('exam_edit_note', { id }, '📝 توضیح جدید را ارسال کنید.\nبرای حذف توضیح، فقط <code>-</code> بفرستید.');
+    case 'epd': return prompt('exam_edit_pubdate', { id }, '🚀 تاریخ/ساعت جدید انتشار (شمسی) را ارسال کنید:\nمثال: <code>1404/07/12 08:00</code>');
+    case 'ec': {
+      await ack();
+      const e = await env.DB.prepare('SELECT title FROM exams WHERE id=?').bind(id).first();
+      if (!e) return examList(env, chatId, msgId, 0);
+      return show(env, chatId, msgId, `🚫 امتحان «<b>${esc(e.title)}</b>» لغو بشود؟\nاز تابلوی کانال هم حذف می‌شود.`,
+        kb([[btn('✅ بله، لغو کن', `a:ecok:${id}`)], [btn('🔙 انصراف', `a:ed:${id}`)]]));
+    }
+    case 'ecok': {
+      await env.DB.prepare("UPDATE exams SET status='cancelled',confirm_pending=0,updated_at=? WHERE id=?").bind(now(), id).run();
+      await renderBoard(env);
+      await ack('🚫 لغو شد');
+      return examDetail(env, chatId, msgId, id);
+    }
+    case 'edel': {
+      await ack();
+      const e = await env.DB.prepare('SELECT title FROM exams WHERE id=?').bind(id).first();
+      if (!e) return examList(env, chatId, msgId, 0);
+      return show(env, chatId, msgId, `🗑 «<b>${esc(e.title)}</b>» کاملاً حذف شود؟ این کار قابل بازگشت نیست.`,
+        kb([[btn('✅ بله، حذف کن', `a:edelok:${id}`)], [btn('🔙 انصراف', `a:ed:${id}`)]]));
+    }
+    case 'edelok': {
+      const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(id).first();
+      await env.DB.prepare('DELETE FROM exams WHERE id=?').bind(id).run();
+      if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
+      await ack('🗑 حذف شد');
+      return examList(env, chatId, msgId, 0);
+    }
+    case 'cf': {
+      const action = p[2], exId = num(3);
+      const e = await env.DB.prepare('SELECT * FROM exams WHERE id=?').bind(exId).first();
+      if (!e) return ack('⚠️ امتحان پیدا نشد.', true);
+      if (action === 'held') {
+        await env.DB.prepare("UPDATE exams SET status='held',confirm_pending=0,updated_at=? WHERE id=?").bind(now(), exId).run();
+        await renderBoard(env);
+        await ack('✅ ثبت شد');
+        return examDetail(env, chatId, msgId, exId);
+      }
+      if (action === 'no') {
+        await env.DB.prepare("UPDATE exams SET status='cancelled',confirm_pending=0,updated_at=? WHERE id=?").bind(now(), exId).run();
+        await renderBoard(env);
+        await ack('❌ به‌عنوان لغوشده ثبت شد');
+        return examDetail(env, chatId, msgId, exId);
+      }
+      if (action === 'resch') {
+        await ack();
+        await setState(env, uid, 'exam_reschedule', { id: exId });
+        return show(env, chatId, msgId, '🗓 تاریخ و ساعت جدید امتحان را به شمسی ارسال کنید:\nمثال: <code>1404/07/20 09:00</code>', examCancelKb);
+      }
+      return ack();
+    }
 
     /* افزودن جزوه */
     case 'add':
@@ -898,6 +1226,39 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
   }
 }
 
+/* ───────────── کرون (بررسی دوره‌ای امتحانات) ───────────── */
+async function runCron(env) {
+  const t = now();
+  const [toPublish, toConfirm] = await Promise.all([
+    env.DB.prepare("SELECT id FROM exams WHERE status='scheduled' AND publish_at<=?").bind(t).all(),
+    env.DB.prepare("SELECT id,title,exam_at FROM exams WHERE status='published' AND confirm_pending=0 AND exam_at<=?").bind(t).all(),
+  ]);
+  if (toPublish.results.length) {
+    await env.DB.batch(toPublish.results.map((r) => env.DB.prepare("UPDATE exams SET status='published',updated_at=? WHERE id=?").bind(t, r.id)));
+  }
+  if (toConfirm.results.length) {
+    await env.DB.batch(toConfirm.results.map((r) => env.DB.prepare('UPDATE exams SET confirm_pending=1,updated_at=? WHERE id=?').bind(t, r.id)));
+  }
+  await renderBoard(env);
+  if (toConfirm.results.length) {
+    const admins = await env.DB.prepare('SELECT user_id FROM admin_sessions WHERE expires_at>?').bind(t).all();
+    for (const a of admins.results) {
+      for (const ex of toConfirm.results) {
+        await tg(env, 'sendMessage', {
+          chat_id: a.user_id,
+          parse_mode: 'HTML',
+          text: `⏳ <b>نیاز به تایید نتیجه</b>\n\n📌 ${esc(ex.title)}\n🗓 ${fmtJalali(ex.exam_at)}\n\nاین امتحان چی شد؟`,
+          reply_markup: kb([
+            [btn('✅ برگزار شد', `a:cf:held:${ex.id}`)],
+            [btn('🔄 تاریخ عوض شد', `a:cf:resch:${ex.id}`)],
+            [btn('❌ برگزار نشد', `a:cf:no:${ex.id}`)],
+          ]),
+        });
+      }
+    }
+  }
+}
+
 /* ───────────── ورودی Worker ───────────── */
 export default {
   async fetch(request, env, ctx) {
@@ -944,10 +1305,30 @@ export default {
         return new Response(hook.ok ? '✅ Webhook و دیتابیس آماده شد.' : '❌ ' + JSON.stringify(hook), { status: hook.ok ? 200 : 500 });
       }
 
+      if (url.pathname === '/cron') {
+        if (!env.ADMIN_PASSWORD || !(await safeEq(url.searchParams.get('key') || '', env.ADMIN_PASSWORD))) return new Response('forbidden', { status: 403 });
+        await initDb(env.DB);
+        await runCron(env);
+        return new Response('✅ بررسی دوره‌ای امتحانات اجرا شد.');
+      }
+
       return new Response('📚 Jozve Library Bot is running.');
     } catch (e) {
       console.error(e && e.stack ? e.stack : e);
       return new Response('error', { status: 500 });
     }
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      (async () => {
+        try {
+          await initDb(env.DB);
+          await runCron(env);
+        } catch (e) {
+          console.error('cron error', e && e.stack ? e.stack : e);
+        }
+      })()
+    );
   },
 };
