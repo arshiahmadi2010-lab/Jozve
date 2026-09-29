@@ -1,5 +1,5 @@
 /**
- * 📚 ربات کتابخان جزوه — Cloudflare Workers + D1
+ * 📚 ربات کتابخانه جزوه — Cloudflare Workers + D1
  *
  * Secrets : BOT_TOKEN, CHANNEL_ID, ADMIN_PASSWORD
  * Binding : DB (D1)
@@ -90,7 +90,12 @@ async function initDb(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '', category_id INTEGER NOT NULL, file_id TEXT NOT NULL, file_unique_id TEXT, file_type TEXT NOT NULL DEFAULT 'document', file_name TEXT, file_size INTEGER DEFAULT 0, channel_message_id INTEGER, downloads INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS states (user_id TEXT PRIMARY KEY, state TEXT NOT NULL, data TEXT, updated_at INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS admin_sessions (user_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, first_name TEXT, username TEXT, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, starts INTEGER NOT NULL DEFAULT 0, downloads INTEGER NOT NULL DEFAULT 0)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS downloads (id INTEGER PRIMARY KEY AUTOINCREMENT, note_id INTEGER NOT NULL, user_id TEXT NOT NULL, ts INTEGER NOT NULL)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_notes_cat ON notes(category_id)`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_dl_note ON downloads(note_id)`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_dl_user ON downloads(user_id)`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_users_seen ON users(last_seen)`),
   ]);
   const seeded = await db.prepare(`SELECT 1 AS x FROM states WHERE user_id='meta:seeded'`).first();
   if (!seeded) {
@@ -123,6 +128,35 @@ async function isAdmin(env, uid) {
 const getNote = (env, id) =>
   env.DB.prepare('SELECT n.*, c.name AS cat_name FROM notes n LEFT JOIN categories c ON c.id=n.category_id WHERE n.id=?').bind(id).first();
 const getCat = (env, id) => env.DB.prepare('SELECT * FROM categories WHERE id=?').bind(id).first();
+
+/* ───────────── ردیابی کاربران ───────────── */
+async function touchUser(env, from) {
+  if (!from || !from.id) return;
+  const uid = String(from.id), t = now();
+  const name = trunc(norm(from.first_name || ''), 100);
+  const uname = trunc(String(from.username || ''), 60);
+  try {
+    await env.DB.prepare(
+      `INSERT INTO users(user_id,first_name,username,first_seen,last_seen,starts,downloads) VALUES(?,?,?,?,?,0,0)
+       ON CONFLICT(user_id) DO UPDATE SET first_name=?,username=?,last_seen=?`
+    ).bind(uid, name, uname, t, t, name, uname, t).run();
+  } catch (e) { console.error('touchUser', e); }
+}
+const markStart = (env, uid) => env.DB.prepare('UPDATE users SET starts=starts+1 WHERE user_id=?').bind(uid).run();
+const logDownload = (env, uid, noteId) =>
+  env.DB.batch([
+    env.DB.prepare('INSERT INTO downloads(note_id,user_id,ts) VALUES(?,?,?)').bind(noteId, uid, now()),
+    env.DB.prepare('UPDATE users SET downloads=downloads+1,last_seen=? WHERE user_id=?').bind(now(), uid),
+  ]);
+function fmtDateTime(ts) {
+  try {
+    return new Date(ts * 1000).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Tehran' });
+  } catch { return '—'; }
+}
+function userLabel(u) {
+  const n = esc(u.first_name || 'کاربر');
+  return u.username ? `${n} (@${esc(u.username)})` : `${n} [<code>${esc(u.user_id)}</code>]`;
+}
 
 /* ───────────── ارسال فایل ───────────── */
 const captionOf = (n, catName) =>
@@ -242,12 +276,15 @@ async function runSearch(env, chatId, msgId, uid, q, page) {
   return show(env, chatId, msgId, `🔍 نتایج «${esc(query)}»\n📄 ${fa(total)} مورد پیدا شد`, kb(rows));
 }
 
-async function userGet(env, chatId, id, ack) {
+async function userGet(env, chatId, uid, id, ack) {
   const n = await getNote(env, id);
   if (!n) return ack('⚠️ این جزوه دیگر موجود نیست.', true);
   const r = await sendFile(env, chatId, n, n.cat_name);
   if (!r.ok) return ack('⚠️ ارسال فایل ناموفق بود. بعداً دوباره تلاش کنید.', true);
-  await env.DB.prepare('UPDATE notes SET downloads=downloads+1 WHERE id=?').bind(id).run();
+  await Promise.all([
+    env.DB.prepare('UPDATE notes SET downloads=downloads+1 WHERE id=?').bind(id).run(),
+    logDownload(env, uid, id),
+  ]);
   return ack('📥 جزوه ارسال شد');
 }
 
@@ -292,9 +329,28 @@ async function adminNote(env, chatId, msgId, id, page = 0) {
   return show(env, chatId, msgId, text, kb([
     [btn('✏️ تغییر نام', `a:rn:${id}`), btn('🏷 تغییر هشتگ', `a:rh:${id}`)],
     [btn('📂 تغییر دسته', `a:rc:${id}`), btn('🔄 جایگزینی فایل', `a:rf:${id}`)],
-    [btn('📥 دریافت فایل', `a:gt:${id}`), btn('🗑 حذف', `a:del:${id}`)],
+    [btn('📥 دریافت فایل', `a:gt:${id}`), btn('👤 دریافت‌کنندگان', `a:nd:${id}:0`)],
+    [btn('🗑 حذف', `a:del:${id}`)],
     [btn('🔙 بازگشت', `a:nl:${page}`)],
   ]));
+}
+
+async function adminNoteDownloaders(env, chatId, msgId, noteId, page) {
+  const n = await getNote(env, noteId);
+  if (!n) return show(env, chatId, msgId, '⚠️ جزوه پیدا نشد.', kb([[btn('🔙 بازگشت', 'a:nl:0')]]));
+  const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM downloads WHERE note_id=?').bind(noteId).first()).c;
+  page = clampPage(page, total);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const { results } = await env.DB.prepare(
+    `SELECT d.ts,u.user_id,u.first_name,u.username FROM downloads d LEFT JOIN users u ON u.user_id=d.user_id
+     WHERE d.note_id=? ORDER BY d.ts DESC LIMIT ? OFFSET ?`
+  ).bind(noteId, PAGE_SIZE, page * PAGE_SIZE).all();
+  const lines = results.map((u, i) => `${fa(page * PAGE_SIZE + i + 1)}. ${userLabel(u)} — ${fmtDateTime(u.ts)}`).join('\n');
+  const text = `👤 <b>دریافت‌کنندگان</b>\n📄 ${esc(n.title)}\n\n` +
+    (total ? `📥 مجموع: ${fa(total)}\n\n${lines}` : 'هنوز کسی این جزوه را دریافت نکرده است.');
+  const rows = pager(page, pages, `a:nd:${noteId}:`);
+  rows.push([btn('🔙 بازگشت', `a:n:${noteId}:0`)]);
+  return show(env, chatId, msgId, text, kb(rows));
 }
 
 async function adminCats(env, chatId, msgId) {
@@ -308,13 +364,48 @@ async function adminCats(env, chatId, msgId) {
 }
 
 async function adminStats(env, chatId, msgId) {
-  const t = await env.DB.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(downloads),0) AS d, COALESCE(SUM(file_size),0) AS s FROM notes').first();
-  const cats = await env.DB.prepare('SELECT c.name,COUNT(n.id) AS cnt FROM categories c LEFT JOIN notes n ON n.category_id=c.id GROUP BY c.id ORDER BY c.id').all();
+  const t0 = now(), day = 86400;
+  const [t, cats, u, topNotes] = await Promise.all([
+    env.DB.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(downloads),0) AS d, COALESCE(SUM(file_size),0) AS s FROM notes').first(),
+    env.DB.prepare('SELECT c.name,COUNT(n.id) AS cnt FROM categories c LEFT JOIN notes n ON n.category_id=c.id GROUP BY c.id ORDER BY c.id').all(),
+    env.DB.prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN first_seen>=? THEN 1 ELSE 0 END) AS d1,
+              SUM(CASE WHEN first_seen>=? THEN 1 ELSE 0 END) AS d7,
+              SUM(CASE WHEN last_seen>=? THEN 1 ELSE 0 END) AS active7
+       FROM users`
+    ).bind(t0 - day, t0 - 7 * day, t0 - 7 * day).first(),
+    env.DB.prepare('SELECT id,title,downloads FROM notes WHERE downloads>0 ORDER BY downloads DESC LIMIT 5').all(),
+  ]);
   const lines = cats.results.map((c) => `${icon(c.name)} ${esc(c.name)}: ${fa(c.cnt)}`).join('\n');
+  const topLines = topNotes.results.length
+    ? topNotes.results.map((n, i) => `${fa(i + 1)}. ${esc(trunc(n.title, 40))} — ${fa(n.downloads)} دریافت`).join('\n')
+    : '—';
   const text =
-    `📊 <b>آمار</b>\n\n📄 تعداد جزوه‌ها: ${fa(t.n)}\n📂 تعداد دسته‌بندی‌ها: ${fa(cats.results.length)}\n` +
-    `📥 مجموع دریافت‌ها: ${fa(t.d)}\n💾 حجم کل فایل‌ها: ${fmtSize(t.s)}\n\n<b>به تفکیک دسته:</b>\n${lines}`;
-  return show(env, chatId, msgId, text, kb([[btn('🔙 پنل مدیریت', 'a:panel')]]));
+    `📊 <b>آمار</b>\n\n` +
+    `📄 تعداد جزوه‌ها: ${fa(t.n)}\n📂 تعداد دسته‌بندی‌ها: ${fa(cats.results.length)}\n` +
+    `📥 مجموع دریافت‌ها: ${fa(t.d)}\n💾 حجم کل فایل‌ها: ${fmtSize(t.s)}\n\n` +
+    `👥 <b>کاربران</b>\n👤 کل کاربران: ${fa(u.total || 0)}\n🆕 جدید (۲۴ساعت اخیر): ${fa(u.d1 || 0)}\n` +
+    `📅 جدید (۷ روز اخیر): ${fa(u.d7 || 0)}\n🟢 فعال در ۷ روز اخیر: ${fa(u.active7 || 0)}\n\n` +
+    `🏆 <b>پربازدیدترین جزوه‌ها:</b>\n${topLines}\n\n` +
+    `<b>به تفکیک دسته:</b>\n${lines}`;
+  return show(env, chatId, msgId, text, kb([[btn('👥 لیست کاربران', 'a:ux:0')], [btn('🔙 پنل مدیریت', 'a:panel')]]));
+}
+
+async function adminUsers(env, chatId, msgId, page) {
+  const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM users').first()).c;
+  page = clampPage(page, total);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const { results } = await env.DB.prepare(
+    'SELECT user_id,first_name,username,first_seen,last_seen,starts,downloads FROM users ORDER BY last_seen DESC LIMIT ? OFFSET ?'
+  ).bind(PAGE_SIZE, page * PAGE_SIZE).all();
+  const lines = results.map((u, i) =>
+    `${fa(page * PAGE_SIZE + i + 1)}. ${userLabel(u)}\n   🗓 عضویت: ${fmtDate(u.first_seen)} · ▶️ استارت: ${fa(u.starts)} · 📥 دریافت: ${fa(u.downloads)}\n   🕒 آخرین بازدید: ${fmtDateTime(u.last_seen)}`
+  ).join('\n\n');
+  const text = `👥 <b>لیست کاربران</b>\n📄 مجموع: ${fa(total)}\n\n` + (lines || 'هنوز کاربری ثبت نشده است.');
+  const rows = pager(page, pages, 'a:ux:');
+  rows.push([btn('🔙 آمار', 'a:st')]);
+  return show(env, chatId, msgId, text, kb(rows));
 }
 
 /* ───────────── آپدیت (جایگزینی) جزوه‌ی موجود ───────────── */
@@ -436,8 +527,12 @@ async function onMessage(m, env) {
   const chatId = m.chat.id, uid = String(m.from.id);
   const text = (m.text || '').trim();
   const cmd = text.startsWith('/') ? text.split(/[\s@]/)[0].toLowerCase() : null;
+  await touchUser(env, m.from);
 
-  if (cmd === '/start' || cmd === '/help') { await clearState(env, uid); return viewHome(env, chatId, null); }
+  if (cmd === '/start' || cmd === '/help') {
+    await Promise.all([clearState(env, uid), markStart(env, uid)]);
+    return viewHome(env, chatId, null);
+  }
   if (cmd === '/admin') return adminEntry(env, chatId, uid);
   if (cmd === '/cancel') {
     await clearState(env, uid);
@@ -553,6 +648,7 @@ async function onCallback(cq, env) {
   try {
     if (!msg || msg.chat.type !== 'private' || d === 'noop') return;
     const chatId = msg.chat.id, msgId = msg.message_id;
+    await touchUser(env, cq.from);
     const p = d.split(':');
     const num = (i) => parseInt(p[i], 10) || 0;
 
@@ -571,7 +667,7 @@ async function userRoute(env, p, num, chatId, msgId, uid, ack) {
     case 'home': await ack(); await clearState(env, uid); return viewHome(env, chatId, msgId);
     case 'c': await ack(); return viewCategory(env, chatId, msgId, num(2), num(3));
     case 'n': await ack(); return viewNote(env, chatId, msgId, num(2), p[3]);
-    case 'g': return userGet(env, chatId, num(2), ack);
+    case 'g': return userGet(env, chatId, uid, num(2), ack);
     case 's':
       await ack();
       await setState(env, uid, 'search', {});
@@ -604,6 +700,8 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       await ack('🚪 از پنل خارج شدید');
       return show(env, chatId, msgId, '🚪 از پنل مدیریت خارج شدید.', kb([[btn('🏠 کتابخانه', 'u:home')]]));
     case 'st': await ack(); return adminStats(env, chatId, msgId);
+    case 'ux': await ack(); return adminUsers(env, chatId, msgId, id);
+    case 'nd': await ack(); return adminNoteDownloaders(env, chatId, msgId, id, num(3));
 
     /* افزودن جزوه */
     case 'add':
