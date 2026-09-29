@@ -1,9 +1,10 @@
-
 /**
  * 📚 ربات کتابخانه جزوه — Cloudflare Workers + D1
  *
  * Secrets : BOT_TOKEN, CHANNEL_ID, ADMIN_PASSWORD
  * Binding : DB (D1)
+ * توجه: فایل‌های جزوه هیچ‌وقت به کانال ارسال نمی‌شوند؛ فقط از همان file_id که خود ادمین
+ * موقع آپلود می‌فرستد استفاده می‌شود. CHANNEL_ID فقط برای تابلوی امتحانات لازم است.
  *
  * جدول‌ها به‌صورت خودکار ساخته می‌شوند. بعد از Deploy این آدرس را یک‌بار باز کنید:
  *   https://<worker>.workers.dev/setup?key=<ADMIN_PASSWORD>
@@ -227,14 +228,6 @@ const sendFile = (env, chatId, n, catName) =>
     caption: captionOf(n, catName),
     parse_mode: 'HTML',
   });
-
-async function syncChannelCaption(env, noteId) {
-  const n = await getNote(env, noteId);
-  if (!n || !n.channel_message_id) return;
-  await tg(env, 'editMessageCaption', {
-    chat_id: env.CHANNEL_ID, message_id: n.channel_message_id, caption: captionOf(n, n.cat_name), parse_mode: 'HTML',
-  });
-}
 
 function extractFile(m) {
   if (m.document) return { file_id: m.document.file_id, file_unique_id: m.document.file_unique_id, file_type: 'document', file_name: m.document.file_name || '', file_size: m.document.file_size || 0 };
@@ -685,15 +678,10 @@ async function finishAdd(env, chatId, uid, data, tagsText) {
   const cat = await getCat(env, data.cat);
   if (!cat) { await clearState(env, uid); return sendText(env, chatId, '⚠️ دسته‌بندی پیدا نشد.', kb([[btn('🔙 پنل', 'a:panel')]])); }
   const note = { ...data.file, title: data.title, hashtags: parseTags(tagsText || '') };
-  const r = await sendFile(env, env.CHANNEL_ID, note, cat.name);
-  if (!r.ok) {
-    return sendText(env, chatId, `⚠️ ارسال به کانال ناموفق بود:\n<code>${esc(r.description || '')}</code>\n\nمطمئن شوید ربات در کانال ادمین است و CHANNEL_ID درست است. دوباره هشتگ را بفرستید.`,
-      kb([[btn('⏭ بدون هشتگ (تلاش مجدد)', 'a:skiptags')], [btn('❌ انصراف', 'a:cancel')]]));
-  }
   const t = now();
   await env.DB.prepare(
-    'INSERT INTO notes(title,hashtags,category_id,file_id,file_unique_id,file_type,file_name,file_size,channel_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)'
-  ).bind(note.title, note.hashtags, cat.id, note.file_id, note.file_unique_id || '', note.file_type, note.file_name || '', note.file_size || 0, r.result.message_id, t, t).run();
+    'INSERT INTO notes(title,hashtags,category_id,file_id,file_unique_id,file_type,file_name,file_size,channel_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,NULL,?,?)'
+  ).bind(note.title, note.hashtags, cat.id, note.file_id, note.file_unique_id || '', note.file_type, note.file_name || '', note.file_size || 0, t, t).run();
   await clearState(env, uid);
   return sendText(env, chatId,
     `✅ <b>جزوه با موفقیت افزوده شد</b>\n\n📄 ${esc(note.title)}\n📂 ${esc(cat.name)}\n🏷 ${esc(note.hashtags || '—')}`,
@@ -752,14 +740,12 @@ async function onAdminState(env, m, uid, st, text) {
       const title = trunc(norm(text), 150);
       if (!title) return sendText(env, chatId, '⚠️ نام معتبر ارسال کنید.', cancelKb);
       await env.DB.prepare('UPDATE notes SET title=?,updated_at=? WHERE id=?').bind(title, now(), d.id).run();
-      await syncChannelCaption(env, d.id);
       await clearState(env, uid);
       return adminNote(env, chatId, null, d.id);
     }
     case 'retag': {
       if (!text) return sendText(env, chatId, '⚠️ هشتگ‌ها را ارسال کنید.', cancelKb);
       await env.DB.prepare('UPDATE notes SET hashtags=?,updated_at=? WHERE id=?').bind(parseTags(text), now(), d.id).run();
-      await syncChannelCaption(env, d.id);
       await clearState(env, uid);
       return adminNote(env, chatId, null, d.id);
     }
@@ -768,11 +754,8 @@ async function onAdminState(env, m, uid, st, text) {
       if (!f) return sendText(env, chatId, '⚠️ لطفاً فایل جدید را ارسال کنید.', cancelKb);
       const old = await getNote(env, d.id);
       if (!old) { await clearState(env, uid); return sendText(env, chatId, '⚠️ جزوه پیدا نشد.'); }
-      const r = await sendFile(env, env.CHANNEL_ID, { ...old, ...f }, old.cat_name); // اول فایل جدید به کانال
-      if (!r.ok) return sendText(env, chatId, `⚠️ ارسال به کانال ناموفق بود:\n<code>${esc(r.description || '')}</code>`, cancelKb);
-      await env.DB.prepare('UPDATE notes SET file_id=?,file_unique_id=?,file_type=?,file_name=?,file_size=?,channel_message_id=?,updated_at=? WHERE id=?')
-        .bind(f.file_id, f.file_unique_id || '', f.file_type, f.file_name || '', f.file_size || 0, r.result.message_id, now(), d.id).run();
-      if (old.channel_message_id) await tg(env, 'deleteMessage', { chat_id: env.CHANNEL_ID, message_id: old.channel_message_id }); // بعد پیام قبلی
+      await env.DB.prepare('UPDATE notes SET file_id=?,file_unique_id=?,file_type=?,file_name=?,file_size=?,channel_message_id=NULL,updated_at=? WHERE id=?')
+        .bind(f.file_id, f.file_unique_id || '', f.file_type, f.file_name || '', f.file_size || 0, now(), d.id).run();
       await clearState(env, uid);
       await sendText(env, chatId, '✅ فایل جایگزین شد.');
       return adminNote(env, chatId, null, d.id);
@@ -1068,7 +1051,6 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       const cat = await getCat(env, num(3));
       if (!cat) return ack('⚠️ دسته‌بندی پیدا نشد.', true);
       await env.DB.prepare('UPDATE notes SET category_id=?,updated_at=? WHERE id=?').bind(cat.id, now(), id).run();
-      await syncChannelCaption(env, id);
       await ack('✅ دسته‌بندی تغییر کرد');
       return adminNote(env, chatId, msgId, id);
     }
@@ -1176,18 +1158,9 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       const cat = await getCat(env, d.cat);
       if (!old || !cat) return ack('⚠️ جزوه یا دسته‌بندی پیدا نشد.', true);
       const f = d.file;
-      // اول فایل جدید به کانال ارسال می‌شود
-      const r = await sendFile(env, env.CHANNEL_ID, { ...f, title: d.title, hashtags: d.hashtags }, cat.name);
-      if (!r.ok) {
-        await ack();
-        return show(env, chatId, msgId, `⚠️ ارسال به کانال ناموفق بود:\n<code>${esc(r.description || '')}</code>`,
-          kb([[btn('🔁 تلاش مجدد', 'a:uok')], [btn('❌ انصراف', 'a:cancel')]]));
-      }
       await env.DB.prepare(
-        'UPDATE notes SET title=?,hashtags=?,category_id=?,file_id=?,file_unique_id=?,file_type=?,file_name=?,file_size=?,channel_message_id=?,updated_at=? WHERE id=?'
-      ).bind(d.title, d.hashtags, cat.id, f.file_id, f.file_unique_id || '', f.file_type, f.file_name || '', f.file_size || 0, r.result.message_id, now(), old.id).run();
-      // بعد پیام قبلی حذف می‌شود
-      if (old.channel_message_id) await tg(env, 'deleteMessage', { chat_id: env.CHANNEL_ID, message_id: old.channel_message_id });
+        'UPDATE notes SET title=?,hashtags=?,category_id=?,file_id=?,file_unique_id=?,file_type=?,file_name=?,file_size=?,channel_message_id=NULL,updated_at=? WHERE id=?'
+      ).bind(d.title, d.hashtags, cat.id, f.file_id, f.file_unique_id || '', f.file_type, f.file_name || '', f.file_size || 0, now(), old.id).run();
       await clearState(env, uid);
       await ack('✅ جزوه آپدیت شد');
       return show(env, chatId, msgId,
