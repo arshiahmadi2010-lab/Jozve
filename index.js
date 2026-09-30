@@ -34,6 +34,7 @@ const norm = (s) => String(s ?? '').replace(/ي/g, 'ی').replace(/ك/g, 'ک').re
 const trunc = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 const fa = (v) => String(v).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]).replace(/\./g, '٫');
 const btn = (text, data) => ({ text, callback_data: data });
+const urlBtn = (text, url) => ({ text, url });
 const kb = (rows) => ({ inline_keyboard: rows });
 const icon = (name) => ICONS[name] || '📁';
 
@@ -674,15 +675,30 @@ async function doLogin(env, m, uid) {
 }
 
 /* ───────────── افزودن جزوه ───────────── */
+async function notifyNewNote(env, note, catName) {
+  let url = null;
+  try {
+    const me = await tg(env, 'getMe', {});
+    if (me.ok && me.result && me.result.username) url = `https://t.me/${me.result.username}?start=note_${note.id}`;
+  } catch (e) { console.error('getMe', e); }
+  const text = `📚 جزوه‌ی «${esc(trunc(note.title, 150))}» اضافه شد.`;
+  const body = { chat_id: env.CHANNEL_ID, text, parse_mode: 'HTML' };
+  if (url) body.reply_markup = kb([[urlBtn('📥 دریافت از ربات', url)]]);
+  const r = await tg(env, 'sendMessage', body);
+  if (!r.ok) console.error('notifyNewNote', r.description);
+}
+
 async function finishAdd(env, chatId, uid, data, tagsText) {
   const cat = await getCat(env, data.cat);
   if (!cat) { await clearState(env, uid); return sendText(env, chatId, '⚠️ دسته‌بندی پیدا نشد.', kb([[btn('🔙 پنل', 'a:panel')]])); }
   const note = { ...data.file, title: data.title, hashtags: parseTags(tagsText || '') };
   const t = now();
-  await env.DB.prepare(
+  const ins = await env.DB.prepare(
     'INSERT INTO notes(title,hashtags,category_id,file_id,file_unique_id,file_type,file_name,file_size,channel_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,NULL,?,?)'
   ).bind(note.title, note.hashtags, cat.id, note.file_id, note.file_unique_id || '', note.file_type, note.file_name || '', note.file_size || 0, t, t).run();
   await clearState(env, uid);
+  const noteId = ins && ins.meta ? ins.meta.last_row_id : null;
+  if (noteId) await notifyNewNote(env, { id: noteId, title: note.title, hashtags: note.hashtags }, cat.name);
   return sendText(env, chatId,
     `✅ <b>جزوه با موفقیت افزوده شد</b>\n\n📄 ${esc(note.title)}\n📂 ${esc(cat.name)}\n🏷 ${esc(note.hashtags || '—')}`,
     kb([[btn('➕ افزودن جزوه دیگر', 'a:add')], [btn('🛠 پنل مدیریت', 'a:panel')]]));
@@ -698,6 +714,9 @@ async function onMessage(m, env) {
 
   if (cmd === '/start' || cmd === '/help') {
     await Promise.all([clearState(env, uid), markStart(env, uid)]);
+    const payload = text.split(/\s+/)[1];
+    const m2 = cmd === '/start' && payload ? payload.match(/^note_(\d+)$/) : null;
+    if (m2) return viewNote(env, chatId, null, parseInt(m2[1], 10), null);
     return viewHome(env, chatId, null);
   }
   if (cmd === '/admin') return adminEntry(env, chatId, uid);
