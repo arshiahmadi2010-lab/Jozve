@@ -677,12 +677,28 @@ async function doLogin(env, m, uid) {
 /* ───────────── افزودن جزوه ───────────── */
 const announceText = (title, catName) => `📚 جزوه‌ی ${esc(catName || '—')} - «${esc(trunc(title, 150))}» اضافه شد.`;
 
+async function getBotUsername(env) {
+  const r = await env.DB.prepare(`SELECT data FROM states WHERE user_id='meta:botinfo'`).first();
+  if (r) { try { const u = JSON.parse(r.data).username; if (u) return u; } catch {} }
+  for (let i = 0; i < 3; i++) {
+    try {
+      const me = await tg(env, 'getMe', {});
+      if (me.ok && me.result && me.result.username) {
+        const t = now(), data = JSON.stringify({ username: me.result.username });
+        await env.DB.prepare(
+          `INSERT INTO states(user_id,state,data,updated_at) VALUES('meta:botinfo','botinfo',?,?)
+           ON CONFLICT(user_id) DO UPDATE SET data=?,updated_at=?`
+        ).bind(data, t, data, t).run();
+        return me.result.username;
+      }
+    } catch (e) { console.error('getMe attempt', i, e); }
+  }
+  return null;
+}
+
 async function notifyNewNote(env, note, catName) {
-  let url = null;
-  try {
-    const me = await tg(env, 'getMe', {});
-    if (me.ok && me.result && me.result.username) url = `https://t.me/${me.result.username}?start=note_${note.id}`;
-  } catch (e) { console.error('getMe', e); }
+  const username = await getBotUsername(env);
+  const url = username ? `https://t.me/${username}?start=note_${note.id}` : null;
   const body = { chat_id: env.CHANNEL_ID, text: announceText(note.title, catName), parse_mode: 'HTML' };
   if (url) body.reply_markup = kb([[urlBtn('📥 دریافت از ربات', url)]]);
   const r = await tg(env, 'sendMessage', body);
@@ -693,7 +709,10 @@ async function notifyNewNote(env, note, catName) {
 async function syncNoteAnnouncement(env, noteId) {
   const n = await getNote(env, noteId);
   if (!n || !n.channel_message_id) return;
-  const r = await tg(env, 'editMessageText', { chat_id: env.CHANNEL_ID, message_id: n.channel_message_id, text: announceText(n.title, n.cat_name), parse_mode: 'HTML' });
+  const username = await getBotUsername(env);
+  const body = { chat_id: env.CHANNEL_ID, message_id: n.channel_message_id, text: announceText(n.title, n.cat_name), parse_mode: 'HTML' };
+  if (username) body.reply_markup = kb([[urlBtn('📥 دریافت از ربات', `https://t.me/${username}?start=note_${n.id}`)]]);
+  const r = await tg(env, 'editMessageText', body);
   if (!r.ok && !/not modified/i.test(r.description || '')) console.error('syncNoteAnnouncement', r.description);
 }
 
