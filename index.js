@@ -27,6 +27,35 @@ const TYPE_LABEL = { document: 'فایل', photo: 'تصویر', video: 'ویدی
 const TEHRAN_OFFSET_MIN = 210; // آفست ثابت ایران +03:30 (بدون تغییر ساعت تابستانی از ۱۴۰۱)
 const EXAM_STATUS_ICON = { scheduled: '🕓', published: '🟢', held: '✅', cancelled: '🚫' };
 
+/* ───────────── تنظیمات قابل‌شخصی‌سازی از پنل اونر ───────────── */
+const DEFAULT_SETTINGS = {
+  new_badge_enabled: '1',
+  new_badge_hours: '24',
+  hot_badge_enabled: '1',
+  hot_badge_min_downloads: '15',
+  card_announce_enabled: '1',
+  board_countdown_enabled: '1',
+  duplicate_check_enabled: '1',
+  corrupt_check_enabled: '1',
+  audit_log_enabled: '1',
+  broadcast_batch_size: '25',
+  broadcast_delay_ms: '1100',
+};
+const SETTINGS_DEF = [
+  { key: 'new_badge_enabled', type: 'bool', label: 'نشان 🆕 جدید' },
+  { key: 'new_badge_hours', type: 'num', label: 'مدت نشان 🆕 (ساعت)', min: 1, max: 240 },
+  { key: 'hot_badge_enabled', type: 'bool', label: 'نشان 🔥 داغ' },
+  { key: 'hot_badge_min_downloads', type: 'num', label: 'حد نصاب 🔥 داغ (دانلود)', min: 1, max: 100000 },
+  { key: 'card_announce_enabled', type: 'bool', label: 'قالب کارتی اعلان کانال' },
+  { key: 'board_countdown_enabled', type: 'bool', label: 'شمارش‌معکوس تابلوی امتحانات' },
+  { key: 'duplicate_check_enabled', type: 'bool', label: 'تشخیص آپلود تکراری' },
+  { key: 'corrupt_check_enabled', type: 'bool', label: 'بررسی خودکار فایل خراب' },
+  { key: 'audit_log_enabled', type: 'bool', label: 'ثبت گزارش فعالیت ادمین‌ها' },
+  { key: 'broadcast_batch_size', type: 'num', label: 'تعداد ارسال هم‌زمان پیام همگانی', min: 1, max: 100 },
+];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const digits = (s) => String(s ?? '').replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+
 /* ───────────── ابزارهای عمومی ───────────── */
 const now = () => Math.floor(Date.now() / 1000);
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -188,7 +217,10 @@ async function initDb(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, first_name TEXT, username TEXT, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, starts INTEGER NOT NULL DEFAULT 0, downloads INTEGER NOT NULL DEFAULT 0)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS downloads (id INTEGER PRIMARY KEY AUTOINCREMENT, note_id INTEGER NOT NULL, user_id TEXT NOT NULL, ts INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', exam_at INTEGER NOT NULL, publish_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'scheduled', confirm_pending INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER NOT NULL DEFAULT 0, admin_name TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_notes_cat ON notes(category_id)`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_exams_status ON exams(status)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_exams_examat ON exams(exam_at)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_dl_note ON downloads(note_id)`),
@@ -198,11 +230,15 @@ async function initDb(db) {
   for (const col of ["role TEXT NOT NULL DEFAULT 'owner'", 'admin_id INTEGER']) {
     try { await db.prepare(`ALTER TABLE admin_sessions ADD COLUMN ${col}`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
   }
+  for (const col of ['broken INTEGER NOT NULL DEFAULT 0', 'checked_at INTEGER NOT NULL DEFAULT 0']) {
+    try { await db.prepare(`ALTER TABLE notes ADD COLUMN ${col}`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
+  }
   const seeded = await db.prepare(`SELECT 1 AS x FROM states WHERE user_id='meta:seeded'`).first();
   if (!seeded) {
     const t = now();
     await db.batch([
       ...DEFAULT_CATS.map((n) => db.prepare('INSERT OR IGNORE INTO categories(name,created_at) VALUES(?,?)').bind(n, t)),
+      ...Object.entries(DEFAULT_SETTINGS).map(([k, v]) => db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').bind(k, v)),
       db.prepare(`INSERT OR IGNORE INTO states(user_id,state,data,updated_at) VALUES('meta:seeded','meta','{}',?)`).bind(t),
     ]);
   }
@@ -232,6 +268,36 @@ async function getRole(env, uid) {
   return 'owner';
 }
 const isAdmin = async (env, uid) => !!(await getRole(env, uid));
+
+/* ───────────── تنظیمات شخصی‌سازی (پنل اونر) ───────────── */
+async function getSettings(env) {
+  const { results } = await env.DB.prepare('SELECT key,value FROM settings').all();
+  const map = { ...DEFAULT_SETTINGS };
+  for (const r of results) map[r.key] = r.value;
+  return map;
+}
+async function getSetting(env, key) {
+  const r = await env.DB.prepare('SELECT value FROM settings WHERE key=?').bind(key).first();
+  return r ? r.value : (DEFAULT_SETTINGS[key] ?? null);
+}
+const setSetting = (env, key, value) =>
+  env.DB.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=?').bind(key, String(value), String(value)).run();
+
+/* ───────────── گزارش فعالیت ادمین‌ها ───────────── */
+async function getActor(env, uid) {
+  const sess = await env.DB.prepare('SELECT role,admin_id FROM admin_sessions WHERE user_id=? AND expires_at>?').bind(uid, now()).first();
+  if (!sess) return { id: 0, name: 'ناشناس' };
+  if (sess.role === 'owner') return { id: 0, name: '👑 مدیر اصلی' };
+  const a = await env.DB.prepare('SELECT name FROM admins WHERE id=?').bind(sess.admin_id).first();
+  return { id: sess.admin_id, name: a ? a.name : `ادمین #${sess.admin_id}` };
+}
+async function logActivity(env, uid, action, detail = '') {
+  try {
+    if ((await getSetting(env, 'audit_log_enabled')) === '0') return;
+    const actor = await getActor(env, uid);
+    await env.DB.prepare('INSERT INTO audit_log(admin_id,admin_name,action,detail,ts) VALUES(?,?,?,?,?)').bind(actor.id, actor.name, action, detail, now()).run();
+  } catch (e) { console.error('logActivity', e); }
+}
 const getNote = (env, id) =>
   env.DB.prepare('SELECT n.*, c.name AS cat_name FROM notes n LEFT JOIN categories c ON c.id=n.category_id WHERE n.id=?').bind(id).first();
 const getCat = (env, id) => env.DB.prepare('SELECT * FROM categories WHERE id=?').bind(id).first();
@@ -295,9 +361,12 @@ function guessTitle(m, f) {
 function pager(page, pages, prefix) {
   if (pages <= 1) return [];
   const row = [];
-  if (page > 0) row.push(btn('◀️ قبلی', prefix + (page - 1)));
-  row.push(btn(`${fa(page + 1)}/${fa(pages)}`, 'noop'));
-  if (page < pages - 1) row.push(btn('بعدی ▶️', prefix + (page + 1)));
+  if (page > 0) row.push(btn('◀️', prefix + (page - 1)));
+  const WIN = 5;
+  let start = Math.max(0, Math.min(page - Math.floor(WIN / 2), pages - WIN));
+  const end = Math.min(pages, start + WIN);
+  for (let i = start; i < end; i++) row.push(btn(i === page ? '●' : '○', i === page ? 'noop' : prefix + i));
+  if (page < pages - 1) row.push(btn('▶️', prefix + (page + 1)));
   return [row];
 }
 const clampPage = (page, total) => Math.min(Math.max(0, page | 0), Math.max(0, Math.ceil(total / PAGE_SIZE) - 1));
@@ -316,15 +385,22 @@ async function viewHome(env, chatId, msgId) {
   return show(env, chatId, msgId, text, kb(rows));
 }
 
+function badgePrefix(n, settings) {
+  let p = '';
+  if (settings.new_badge_enabled !== '0' && now() - n.created_at <= (parseInt(settings.new_badge_hours, 10) || 24) * 3600) p += '🆕 ';
+  if (settings.hot_badge_enabled !== '0' && n.downloads >= (parseInt(settings.hot_badge_min_downloads, 10) || 15)) p += '🔥 ';
+  return p;
+}
 async function viewCategory(env, chatId, msgId, catId, page) {
   const cat = await getCat(env, catId);
   if (!cat) return viewHome(env, chatId, msgId);
   const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes WHERE category_id=?').bind(catId).first()).c;
   page = clampPage(page, total);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const { results } = await env.DB.prepare('SELECT id,title FROM notes WHERE category_id=? ORDER BY id DESC LIMIT ? OFFSET ?')
+  const { results } = await env.DB.prepare('SELECT id,title,created_at,downloads FROM notes WHERE category_id=? ORDER BY id DESC LIMIT ? OFFSET ?')
     .bind(catId, PAGE_SIZE, page * PAGE_SIZE).all();
-  const rows = results.map((n) => [btn('📄 ' + trunc(n.title, 50), `u:n:${n.id}:c${catId}_${page}`)]);
+  const settings = await getSettings(env);
+  const rows = results.map((n) => [btn(badgePrefix(n, settings) + '📄 ' + trunc(n.title, 50), `u:n:${n.id}:c${catId}_${page}`)]);
   rows.push(...pager(page, pages, `u:c:${catId}:`));
   rows.push([btn('🏠 خانه', 'u:home')]);
   const text = `${icon(cat.name)} <b>${esc(cat.name)}</b>\n\n` + (total ? `📄 تعداد جزوه‌ها: ${fa(total)}` : 'هنوز جزوه‌ای در این دسته ثبت نشده است.');
@@ -344,10 +420,13 @@ async function viewNote(env, chatId, msgId, id, ctx) {
     `💾 حجم: ${fmtSize(n.file_size)}\n` +
     `📥 تعداد دریافت: ${fa(n.downloads)}\n` +
     `🗓 تاریخ افزودن: ${fmtDate(n.created_at)}`;
-  return show(env, chatId, msgId, text, kb([
-    [btn('📥 دریافت جزوه', `u:g:${n.id}`)],
-    [btn('🔙 بازگشت', back), btn('🏠 خانه', 'u:home')],
-  ]));
+  const { results: related } = await env.DB.prepare(
+    'SELECT id,title FROM notes WHERE category_id=? AND id<>? ORDER BY downloads DESC LIMIT 2'
+  ).bind(n.category_id, n.id).all();
+  const rows = [[btn('📥 دریافت جزوه', `u:g:${n.id}`)]];
+  for (const r of related) rows.push([btn('🔗 ' + trunc(r.title, 45), `u:n:${r.id}:c${n.category_id}_0`)]);
+  rows.push([btn('🔙 بازگشت', back), btn('🏠 خانه', 'u:home')]);
+  return show(env, chatId, msgId, text, kb(rows));
 }
 
 async function runSearch(env, chatId, msgId, uid, q, page) {
@@ -367,9 +446,10 @@ async function runSearch(env, chatId, msgId, uid, q, page) {
   if (!total) return show(env, chatId, msgId, `🔍 نتیجه‌ای برای «${esc(query)}» پیدا نشد.\n\nنام فایل، هشتگ یا دسته‌بندی را امتحان کنید.`, emptyKb);
   page = clampPage(page, total);
   const pages = Math.ceil(total / PAGE_SIZE);
-  const { results } = await env.DB.prepare(`SELECT n.id,n.title ${from} ORDER BY n.id DESC LIMIT ? OFFSET ?`)
+  const { results } = await env.DB.prepare(`SELECT n.id,n.title,n.created_at,n.downloads ${from} ORDER BY n.id DESC LIMIT ? OFFSET ?`)
     .bind(...binds, PAGE_SIZE, page * PAGE_SIZE).all();
-  const rows = results.map((n) => [btn('📄 ' + trunc(n.title, 50), `u:n:${n.id}:s_${page}`)]);
+  const settings = await getSettings(env);
+  const rows = results.map((n) => [btn(badgePrefix(n, settings) + '📄 ' + trunc(n.title, 50), `u:n:${n.id}:s_${page}`)]);
   rows.push(...pager(page, pages, 'u:sr:'));
   rows.push([btn('🔍 جستجوی جدید', 'u:s'), btn('🏠 خانه', 'u:home')]);
   return show(env, chatId, msgId, `🔍 نتایج «${esc(query)}»\n📄 ${fa(total)} مورد پیدا شد`, kb(rows));
@@ -399,7 +479,11 @@ async function viewPanel(env, chatId, msgId) {
     [btn('🗓 امتحانات و آزمون‌ها', 'a:ex')],
     [btn('📊 آمار', 'a:st')],
   ];
-  if (role === 'owner') rows.push([btn('👥 مدیریت ادمین‌ها', 'a:am')]);
+  if (role === 'owner') {
+    rows.push([btn('👥 مدیریت ادمین‌ها', 'a:am')]);
+    rows.push([btn('📣 پیام همگانی', 'a:bc'), btn('📢 پست کانال سفارشی', 'a:cp')]);
+    rows.push([btn('📋 گزارش فعالیت‌ها', 'a:al:0'), btn('⚙️ تنظیمات', 'a:se')]);
+  }
   rows.push([btn('🏠 نمای کاربران', 'u:home'), sbtn('🚪 خروج', 'a:lo', 'danger')]);
   return show(env, chatId, msgId, `🛠 <b>پنل مدیریت</b>${role === 'owner' ? ' — مدیر اصلی' : ''}\n\nیکی از گزینه‌ها را انتخاب کنید:`, kb(rows));
 }
@@ -599,7 +683,21 @@ async function renderBoard(env) {
   const { results } = await env.DB.prepare(
     `SELECT * FROM exams WHERE status='published' OR (status='held' AND updated_at>=?) ORDER BY (status='held') ASC, exam_at ASC`
   ).bind(t - 86400).all();
-  const header = `🗓 <b>تابلوی امتحانات و آزمون‌ها</b>\n<i>آخرین به‌روزرسانی: ${fmtJalali(t)}</i>\n\n`;
+  let countdownLine = '';
+  if ((await getSetting(env, 'board_countdown_enabled')) !== '0') {
+    const nearest = results.find((e) => e.status !== 'held');
+    if (nearest) {
+      const diff = nearest.exam_at - t;
+      if (diff > 0) {
+        const days = Math.floor(diff / 86400), hours = Math.floor((diff % 86400) / 3600), mins = Math.floor((diff % 3600) / 60);
+        const human = days > 0 ? `${fa(days)} روز و ${fa(hours)} ساعت` : hours > 0 ? `${fa(hours)} ساعت و ${fa(mins)} دقیقه` : `${fa(mins)} دقیقه`;
+        countdownLine = `⏱ <b>نزدیک‌ترین امتحان:</b> ${esc(nearest.title)} — ${human} دیگر\n\n`;
+      } else {
+        countdownLine = `🔥 <b>همین الان:</b> ${esc(nearest.title)}\n\n`;
+      }
+    }
+  }
+  const header = `🗓 <b>تابلوی امتحانات و آزمون‌ها</b>\n<i>آخرین به‌روزرسانی: ${fmtJalali(t)}</i>\n\n` + countdownLine;
   let body;
   if (!results.length) {
     body = '🎉 فعلاً امتحان یا آزمونی در پیش نیست.';
@@ -722,6 +820,7 @@ async function finalizeExam(env, chatId, uid, d, publishAt) {
   ).bind(d.title, d.note || '', d.exam_at, publishAt, status, t, t).run();
   await clearState(env, uid);
   if (status === 'published') await renderBoard(env);
+  await logActivity(env, uid, 'افزودن امتحان', `${d.title} — ${fmtJalali(d.exam_at)}`);
   const when = status === 'published'
     ? 'از همین الان توی تابلوی کانال نمایش داده می‌شود.'
     : `از تاریخ ${fmtJalali(publishAt)} توی تابلوی کانال نمایش داده می‌شود.`;
@@ -856,6 +955,85 @@ async function admDetail(env, chatId, msgId, id, extra = '') {
   ]));
 }
 
+/* ───────────── تنظیمات و شخصی‌سازی ───────────── */
+async function viewSettings(env, chatId, msgId) {
+  const s = await getSettings(env);
+  const rows = SETTINGS_DEF.map((def) => {
+    if (def.type === 'bool') {
+      const on = s[def.key] !== '0';
+      return [btn(`${on ? '✅' : '❌'} ${def.label}`, `a:setg:${def.key}`)];
+    }
+    return [btn(`✏️ ${def.label}: ${fa(s[def.key])}`, `a:setn:${def.key}`)];
+  });
+  rows.push([btn('🔙 پنل مدیریت', 'a:panel')]);
+  return show(env, chatId, msgId, '⚙️ <b>تنظیمات و شخصی‌سازی</b>\n\nهر مورد رو لمس کن تا روشن/خاموش یا تغییرش بدی:', kb(rows));
+}
+
+/* ───────────── گزارش فعالیت ادمین‌ها ───────────── */
+async function adminAuditLog(env, chatId, msgId, page) {
+  const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM audit_log').first()).c;
+  page = clampPage(page, total);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const { results } = await env.DB.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT ? OFFSET ?').bind(PAGE_SIZE, page * PAGE_SIZE).all();
+  const lines = results.map((r) => `🕒 ${fmtDateTime(r.ts)} — ${esc(r.admin_name)}\n<b>${esc(r.action)}</b>` + (r.detail ? `: ${esc(r.detail)}` : ''));
+  const text = `📋 <b>گزارش فعالیت ادمین‌ها</b>\n📄 مجموع: ${fa(total)}\n\n` + (lines.length ? lines.join('\n\n') : 'هنوز فعالیتی ثبت نشده است.');
+  const rows = [...pager(page, pages, 'a:alp:'), [btn('🔙 پنل مدیریت', 'a:panel')]];
+  return show(env, chatId, msgId, text, kb(rows));
+}
+
+/* ───────────── پیام همگانی ───────────── */
+async function runBroadcast(env, uid, text) {
+  const { results } = await env.DB.prepare('SELECT user_id FROM users').all();
+  const batchSize = parseInt(await getSetting(env, 'broadcast_batch_size'), 10) || 25;
+  const delayMs = parseInt(DEFAULT_SETTINGS.broadcast_delay_ms, 10);
+  let ok = 0, fail = 0;
+  for (let i = 0; i < results.length; i += batchSize) {
+    const chunk = results.slice(i, i + batchSize);
+    const res = await Promise.all(chunk.map((u) => tg(env, 'sendMessage', { chat_id: u.user_id, text, parse_mode: 'HTML' })));
+    res.forEach((r) => (r.ok ? ok++ : fail++));
+    if (i + batchSize < results.length) await sleep(delayMs);
+  }
+  await logActivity(env, uid, 'پیام همگانی', `${fa(results.length)} کاربر — موفق: ${fa(ok)}، ناموفق: ${fa(fail)}`);
+  await tg(env, 'sendMessage', { chat_id: uid, parse_mode: 'HTML', text: `📣 <b>نتیجه پیام همگانی</b>\n\n✅ موفق: ${fa(ok)}\n❌ ناموفق: ${fa(fail)}\n👥 مجموع: ${fa(results.length)}` });
+}
+
+/* ───────────── پست سفارشی کانال با دکمه‌های شیشه‌ای ───────────── */
+function cpBtnRows(buttons) {
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2).map((b) => urlBtn(b.label, b.url)));
+  return rows;
+}
+async function viewCpBuilder(env, chatId, msgId, data) {
+  const preview = `📢 <b>پیش‌نمایش پست کانال</b>\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n${data.text}`;
+  const rows = cpBtnRows(data.buttons || []);
+  rows.push([btn('➕ افزودن دکمه', 'a:cpadd')]);
+  if ((data.buttons || []).length) rows.push([sbtn('🚀 ارسال به کانال', 'a:cpsend', 'success')]);
+  rows.push([btn('❌ انصراف', 'a:cpcancel')]);
+  return show(env, chatId, msgId, preview, kb(rows));
+}
+
+/* ───────────── سلامت‌سنجی فایل‌ها (تشخیص فایل خراب/منقضی) ───────────── */
+async function checkFilesHealth(env) {
+  if ((await getSetting(env, 'corrupt_check_enabled')) === '0') return;
+  const LIMIT = 15;
+  const { results } = await env.DB.prepare('SELECT id,title,file_id FROM notes WHERE broken=0 ORDER BY checked_at ASC LIMIT ?').bind(LIMIT).all();
+  if (!results.length) return;
+  const t = now();
+  const broken = [];
+  for (const n of results) {
+    const r = await tg(env, 'getFile', { file_id: n.file_id });
+    await env.DB.prepare('UPDATE notes SET checked_at=?,broken=? WHERE id=?').bind(t, r.ok ? 0 : 1, n.id).run();
+    if (!r.ok) broken.push(n);
+  }
+  if (broken.length) {
+    const ownerChat = await getSetting(env, 'owner_chat_id');
+    if (ownerChat) {
+      const lines = broken.map((n) => `⚠️ ${esc(n.title)} (#${fa(n.id)})`).join('\n');
+      await tg(env, 'sendMessage', { chat_id: ownerChat, parse_mode: 'HTML', text: `🩺 <b>سلامت‌سنجی فایل‌ها</b>\n\nفایل‌های زیر مشکل دارند و نیاز به آپلود مجدد دارند:\n\n${lines}` });
+    }
+  }
+}
+
 /* ───────────── ورود مدیر ───────────── */
 async function getLock(env, uid) {
   const r = await env.DB.prepare('SELECT data FROM states WHERE user_id=?').bind('lock:' + uid).first();
@@ -894,6 +1072,7 @@ async function doLogin(env, m, uid) {
       env.DB.prepare('DELETE FROM states WHERE user_id IN (?,?)').bind('lock:' + uid, uid),
       ...(adminId ? [env.DB.prepare('UPDATE admins SET last_login=? WHERE id=?').bind(t, adminId)] : []),
     ]);
+    if (role === 'owner') await setSetting(env, 'owner_chat_id', String(chatId));
     return viewPanel(env, chatId, null);
   }
   const fails = (lock.until && lock.until <= now() ? 0 : lock.fails) + 1;
@@ -905,7 +1084,12 @@ async function doLogin(env, m, uid) {
 }
 
 /* ───────────── افزودن جزوه ───────────── */
-const announceText = (title, catName) => `📚 جزوه‌ی ${esc(catName || '—')} - «${esc(trunc(title, 150))}» اضافه شد.`;
+function announceText(note, catName, cardOn) {
+  if (cardOn) {
+    return `📚 <b>جزوه‌ی جدید اضافه شد!</b>\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n${icon(catName)} <b>${esc(catName || '—')}</b>\n📝 «${esc(trunc(note.title, 150))}»\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n📎 ${TYPE_LABEL[note.file_type] || 'فایل'} • 💾 ${fmtSize(note.file_size)}`;
+  }
+  return `📚 جزوه‌ی ${esc(catName || '—')} - «${esc(trunc(note.title, 150))}» اضافه شد.`;
+}
 
 async function getBotUsername(env) {
   const r = await env.DB.prepare(`SELECT data FROM states WHERE user_id='meta:botinfo'`).first();
@@ -926,11 +1110,16 @@ async function getBotUsername(env) {
   return null;
 }
 
-async function notifyNewNote(env, note, catName) {
+async function notifyNewNote(env, note, catName, catId) {
   const username = await getBotUsername(env);
-  const url = username ? `https://t.me/${username}?start=note_${note.id}` : null;
-  const body = { chat_id: env.CHANNEL_ID, text: announceText(note.title, catName), parse_mode: 'HTML' };
-  if (url) body.reply_markup = kb([[urlBtn('📥 دریافت از ربات', url)]]);
+  const cardOn = (await getSetting(env, 'card_announce_enabled')) !== '0';
+  const body = { chat_id: env.CHANNEL_ID, text: announceText(note, catName, cardOn), parse_mode: 'HTML' };
+  const rows = [];
+  if (username) {
+    rows.push([urlBtn('📥 دریافت از ربات', `https://t.me/${username}?start=note_${note.id}`)]);
+    if (catId) rows.push([urlBtn('👀 مشاهده این دسته', `https://t.me/${username}?start=cat_${catId}`)]);
+  }
+  if (rows.length) body.reply_markup = kb(rows);
   const r = await tg(env, 'sendMessage', body);
   if (!r.ok) { console.error('notifyNewNote', r.description); return null; }
   return r.result.message_id;
@@ -940,8 +1129,14 @@ async function syncNoteAnnouncement(env, noteId) {
   const n = await getNote(env, noteId);
   if (!n || !n.channel_message_id) return;
   const username = await getBotUsername(env);
-  const body = { chat_id: env.CHANNEL_ID, message_id: n.channel_message_id, text: announceText(n.title, n.cat_name), parse_mode: 'HTML' };
-  if (username) body.reply_markup = kb([[urlBtn('📥 دریافت از ربات', `https://t.me/${username}?start=note_${n.id}`)]]);
+  const cardOn = (await getSetting(env, 'card_announce_enabled')) !== '0';
+  const body = { chat_id: env.CHANNEL_ID, message_id: n.channel_message_id, text: announceText(n, n.cat_name, cardOn), parse_mode: 'HTML' };
+  const rows = [];
+  if (username) {
+    rows.push([urlBtn('📥 دریافت از ربات', `https://t.me/${username}?start=note_${n.id}`)]);
+    if (n.category_id) rows.push([urlBtn('👀 مشاهده این دسته', `https://t.me/${username}?start=cat_${n.category_id}`)]);
+  }
+  if (rows.length) body.reply_markup = kb(rows);
   const r = await tg(env, 'editMessageText', body);
   if (!r.ok && !/not modified/i.test(r.description || '')) console.error('syncNoteAnnouncement', r.description);
 }
@@ -957,8 +1152,9 @@ async function finishAdd(env, chatId, uid, data, tagsText) {
   await clearState(env, uid);
   const noteId = ins && ins.meta ? ins.meta.last_row_id : null;
   if (noteId) {
-    const msgId = await notifyNewNote(env, { id: noteId, title: note.title }, cat.name);
+    const msgId = await notifyNewNote(env, { ...note, id: noteId }, cat.name, cat.id);
     if (msgId) await env.DB.prepare('UPDATE notes SET channel_message_id=? WHERE id=?').bind(msgId, noteId).run();
+    await logActivity(env, uid, 'افزودن جزوه', `${note.title} (#${noteId}) در ${cat.name}`);
   }
   return sendText(env, chatId,
     `✅ <b>جزوه با موفقیت افزوده شد</b>\n\n📄 ${esc(note.title)}\n📂 ${esc(cat.name)}\n🏷 ${esc(note.hashtags || '—')}`,
@@ -978,6 +1174,8 @@ async function onMessage(m, env) {
     const payload = text.split(/\s+/)[1];
     const m2 = cmd === '/start' && payload ? payload.match(/^note_(\d+)$/) : null;
     if (m2) return viewNote(env, chatId, null, parseInt(m2[1], 10), null);
+    const m3 = cmd === '/start' && payload ? payload.match(/^cat_(\d+)$/) : null;
+    if (m3) return viewCategory(env, chatId, null, parseInt(m3[1], 10), 0);
     return viewHome(env, chatId, null);
   }
   if (cmd === '/admin') return adminEntry(env, chatId, uid);
@@ -1009,6 +1207,14 @@ async function onAdminState(env, m, uid, st, text) {
       if (!f) return sendText(env, chatId, '⚠️ لطفاً خود فایل جزوه را ارسال کنید.', cancelKb);
       const title = guessTitle(m, f);
       await setState(env, uid, 'add_cat', { file: f, title });
+      if ((await getSetting(env, 'duplicate_check_enabled')) !== '0' && f.file_unique_id) {
+        const dup = await env.DB.prepare("SELECT id,title FROM notes WHERE file_unique_id=? AND file_unique_id<>''").bind(f.file_unique_id).first();
+        if (dup) {
+          return sendText(env, chatId,
+            `🔁 <b>هشدار آپلود تکراری</b>\n\nاین فایل شبیه جزوه‌ی «${esc(dup.title)}» (#${fa(dup.id)}) است که قبلاً اضافه شده.\n\nادامه می‌دهید؟`,
+            kb([[btn('➕ بله، باز هم اضافه کن', 'a:ac_force')], [btn('👀 مشاهده جزوه مشابه', `a:n:${dup.id}:0`)], [btn('❌ انصراف', 'a:cancel')]]));
+        }
+      }
       return viewAddCat(env, chatId, null, title);
     }
     case 'add_cat':
@@ -1022,6 +1228,7 @@ async function onAdminState(env, m, uid, st, text) {
       await env.DB.prepare('UPDATE notes SET title=?,updated_at=? WHERE id=?').bind(title, now(), d.id).run();
       await clearState(env, uid);
       await syncNoteAnnouncement(env, d.id);
+      await logActivity(env, uid, 'تغییر نام جزوه', `#${d.id} → ${title}`);
       return adminNote(env, chatId, null, d.id);
     }
     case 'retag': {
@@ -1035,9 +1242,18 @@ async function onAdminState(env, m, uid, st, text) {
       if (!f) return sendText(env, chatId, '⚠️ لطفاً فایل جدید را ارسال کنید.', cancelKb);
       const old = await getNote(env, d.id);
       if (!old) { await clearState(env, uid); return sendText(env, chatId, '⚠️ جزوه پیدا نشد.'); }
+      if ((await getSetting(env, 'duplicate_check_enabled')) !== '0' && f.file_unique_id) {
+        const dup = await env.DB.prepare("SELECT id,title FROM notes WHERE file_unique_id=? AND file_unique_id<>'' AND id<>?").bind(f.file_unique_id, d.id).first();
+        if (dup) {
+          await setState(env, uid, 'refile_force', { id: d.id, file: f });
+          return sendText(env, chatId, `🔁 این فایل شبیه جزوه‌ی «${esc(dup.title)}» (#${fa(dup.id)}) است.\n\nادامه می‌دهید؟`,
+            kb([[btn('✅ بله، جایگزین کن', 'a:rf_force')], [btn('❌ انصراف', 'a:cancel')]]));
+        }
+      }
       await env.DB.prepare('UPDATE notes SET file_id=?,file_unique_id=?,file_type=?,file_name=?,file_size=?,updated_at=? WHERE id=?')
         .bind(f.file_id, f.file_unique_id || '', f.file_type, f.file_name || '', f.file_size || 0, now(), d.id).run();
       await clearState(env, uid);
+      await logActivity(env, uid, 'جایگزینی فایل', `${old.title} (#${d.id})`);
       await sendText(env, chatId, '✅ فایل جایگزین شد.');
       return adminNote(env, chatId, null, d.id);
     }
@@ -1086,6 +1302,7 @@ async function onAdminState(env, m, uid, st, text) {
       if (err) return sendText(env, chatId, err, kb([[btn('🎲 ساخت رمز تصادفی', 'a:amgn')], [btn('❌ انصراف', 'a:cancel')]]));
       const id = await createAdmin(env, d.name, pw);
       await clearState(env, uid);
+      await logActivity(env, uid, 'افزودن ادمین', `${d.name} (#${id})`);
       return admDetail(env, chatId, null, id, '\n\n✅ ادمین ساخته شد. رمز را به خودش بدهید؛ برای امنیت، رمز دوباره نمایش داده نمی‌شود.');
     }
     case 'adm_rename': {
@@ -1148,6 +1365,37 @@ async function onAdminState(env, m, uid, st, text) {
       if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
       return examDetail(env, chatId, null, d.id);
     }
+    case 'set_num': {
+      const v = parseInt(digits(text).replace(/[^\d-]/g, ''), 10);
+      if (!Number.isFinite(v) || v < d.min || v > d.max) return sendText(env, chatId, `⚠️ عدد بین ${fa(d.min)} تا ${fa(d.max)} بفرستید.`, cancelKb);
+      await setSetting(env, d.key, v);
+      await clearState(env, uid);
+      await logActivity(env, uid, 'تغییر تنظیمات', `${d.label} → ${fa(v)}`);
+      return viewSettings(env, chatId, null);
+    }
+    case 'broadcast_text': {
+      if (!text) return sendText(env, chatId, '⚠️ متن پیام را بفرستید.', cancelKb);
+      await setState(env, uid, 'bc_confirm', { text });
+      const count = (await env.DB.prepare('SELECT COUNT(*) AS c FROM users').first()).c;
+      return show(env, chatId, null, `📣 <b>پیش‌نمایش پیام همگانی</b>\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n${text}\n┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n👥 به ${fa(count)} کاربر ارسال می‌شود.`,
+        kb([[sbtn('🚀 ارسال کن', 'a:bcok', 'success')], [btn('❌ انصراف', 'a:cancel')]]));
+    }
+    case 'cp_text': {
+      if (!text) return sendText(env, chatId, '⚠️ متن پست را بفرستید.', cancelKb);
+      const data = { text, buttons: [] };
+      await setState(env, uid, 'cp_building', data);
+      return viewCpBuilder(env, chatId, null, data);
+    }
+    case 'cp_addbtn': {
+      const parts = text.split('|').map((x) => x.trim());
+      if (parts.length !== 2 || !/^https?:\/\//i.test(parts[1])) {
+        return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال:\n<code>مشاهده جزوه‌ها | https://t.me/ربات</code>', cancelKb);
+      }
+      const buttons = [...(d.buttons || []), { label: trunc(parts[0], 40), url: parts[1] }].slice(0, 6);
+      const data = { text: d.text, buttons };
+      await setState(env, uid, 'cp_building', data);
+      return viewCpBuilder(env, chatId, null, data);
+    }
     default:
       await clearState(env, uid);
   }
@@ -1202,7 +1450,9 @@ async function userRoute(env, p, num, chatId, msgId, uid, ack) {
 
 async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
   const id = num(2);
-  if (p[1].startsWith('am') && (await getRole(env, uid)) !== 'owner') return ack('⛔ فقط مدیر اصلی به این بخش دسترسی دارد.', true);
+  const role = await getRole(env, uid);
+  const ownerOnlyPrefix = ['am', 'se', 'bc', 'cp', 'al'].some((pre) => p[1].startsWith(pre));
+  if (ownerOnlyPrefix && role !== 'owner') return ack('⛔ فقط مدیر اصلی به این بخش دسترسی دارد.', true);
   const prompt = async (state, data, text) => {
     await ack();
     await setState(env, uid, state, data);
@@ -1222,6 +1472,64 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
     case 'st': await ack(); return adminStats(env, chatId, msgId);
     case 'ux': await ack(); return adminUsers(env, chatId, msgId, id);
     case 'nd': await ack(); return adminNoteDownloaders(env, chatId, msgId, id, num(3));
+
+    /* تنظیمات و شخصی‌سازی */
+    case 'se': await ack(); await clearState(env, uid); return viewSettings(env, chatId, msgId);
+    case 'setg': {
+      const def = SETTINGS_DEF.find((x) => x.key === p[2]);
+      if (!def) return ack();
+      const cur = (await getSetting(env, def.key)) !== '0';
+      await setSetting(env, def.key, cur ? '0' : '1');
+      await logActivity(env, uid, 'تغییر تنظیمات', `${def.label} → ${cur ? 'غیرفعال' : 'فعال'}`);
+      await ack('✅ تغییر کرد');
+      return viewSettings(env, chatId, msgId);
+    }
+    case 'setn': {
+      const def = SETTINGS_DEF.find((x) => x.key === p[2]);
+      if (!def) return ack();
+      await ack();
+      await setState(env, uid, 'set_num', def);
+      return show(env, chatId, msgId, `✏️ مقدار جدید «${esc(def.label)}» را بفرستید (عددی بین ${fa(def.min)} تا ${fa(def.max)}):`, cancelKb);
+    }
+
+    /* گزارش فعالیت ادمین‌ها */
+    case 'al': await ack(); await clearState(env, uid); return adminAuditLog(env, chatId, msgId, 0);
+    case 'alp': await ack(); return adminAuditLog(env, chatId, msgId, id);
+
+    /* پیام همگانی */
+    case 'bc': return prompt('broadcast_text', {}, '📣 <b>پیام همگانی</b>\n\n✏️ متن پیام را بفرستید (HTML مجاز است):');
+    case 'bcok': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'bc_confirm') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack('🚀 ارسال شروع شد...');
+      await clearState(env, uid);
+      await show(env, chatId, msgId, '🚀 در حال ارسال پیام همگانی... نتیجه به‌زودی برایتان ارسال می‌شود.', kb([[btn('🛠 پنل', 'a:panel')]]));
+      return runBroadcast(env, uid, st.data.text);
+    }
+
+    /* پست سفارشی کانال با دکمه شیشه‌ای */
+    case 'cp': return prompt('cp_text', {}, '📢 <b>پست سفارشی کانال</b>\n\n✏️ متن پیام را بفرستید (HTML مجاز است):');
+    case 'cpadd': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'cp_building') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      await setState(env, uid, 'cp_addbtn', st.data);
+      return show(env, chatId, msgId, '🔘 دکمه را به این شکل بفرستید:\n<code>متن دکمه | https://لینک</code>', cancelKb);
+    }
+    case 'cpsend': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'cp_building') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      const body = { chat_id: env.CHANNEL_ID, text: st.data.text, parse_mode: 'HTML' };
+      const rows = cpBtnRows(st.data.buttons || []);
+      if (rows.length) body.reply_markup = kb(rows);
+      const r = await tg(env, 'sendMessage', body);
+      await clearState(env, uid);
+      if (!r.ok) return show(env, chatId, msgId, '⚠️ ارسال ناموفق بود: ' + esc(r.description || ''), kb([[btn('🔙 پنل', 'a:panel')]]));
+      await logActivity(env, uid, 'پست سفارشی کانال', trunc(st.data.text.replace(/<[^>]+>/g, ''), 80));
+      return show(env, chatId, msgId, '✅ پست در کانال ارسال شد.', kb([[btn('🛠 پنل مدیریت', 'a:panel')]]));
+    }
+    case 'cpcancel': await ack(); await clearState(env, uid); return viewPanel(env, chatId, msgId);
 
     /* مدیریت ادمین‌ها */
     case 'am': await ack(); await clearState(env, uid); return admList(env, chatId, msgId, 0);
@@ -1250,6 +1558,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       if (!a) return ack('⚠️ ادمین پیدا نشد.', true);
       await env.DB.prepare('UPDATE admins SET active=? WHERE id=?').bind(a.active ? 0 : 1, id).run();
       if (a.active) await env.DB.prepare('DELETE FROM admin_sessions WHERE admin_id=?').bind(id).run();
+      await logActivity(env, uid, a.active ? 'غیرفعال‌سازی ادمین' : 'فعال‌سازی ادمین', `#${id}`);
       await ack(a.active ? '⏸ غیرفعال شد' : '▶️ فعال شد');
       return admDetail(env, chatId, msgId, id);
     }
@@ -1269,6 +1578,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
         env.DB.prepare('DELETE FROM admin_sessions WHERE admin_id=?').bind(id),
         env.DB.prepare('DELETE FROM admins WHERE id=?').bind(id),
       ]);
+      await logActivity(env, uid, 'حذف ادمین', `#${id}`);
       await ack('🗑 حذف شد');
       return admList(env, chatId, msgId, 0);
 
@@ -1392,6 +1702,26 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       return ack();
     }
 
+    /* ادامه با وجود تشخیص فایل تکراری */
+    case 'ac_force': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'add_cat') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      return viewAddCat(env, chatId, msgId, st.data.title);
+    }
+    case 'rf_force': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'refile_force') return ack('⏱ عملیات منقضی شده است.', true);
+      const f = st.data.file;
+      const old = await getNote(env, st.data.id);
+      await env.DB.prepare('UPDATE notes SET file_id=?,file_unique_id=?,file_type=?,file_name=?,file_size=?,updated_at=? WHERE id=?')
+        .bind(f.file_id, f.file_unique_id || '', f.file_type, f.file_name || '', f.file_size || 0, now(), st.data.id).run();
+      await clearState(env, uid);
+      if (old) await logActivity(env, uid, 'جایگزینی فایل', `${old.title} (#${st.data.id})`);
+      await ack('✅ فایل جایگزین شد');
+      return adminNote(env, chatId, msgId, st.data.id);
+    }
+
     /* افزودن جزوه */
     case 'add':
       return prompt('add_file', {}, '➕ <b>افزودن جزوه</b>\n\n📎 فایل جزوه را ارسال کنید.\n<i>اگر نام دلخواه دارید، آن را در کپشن فایل بنویسید.</i>');
@@ -1451,6 +1781,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       if (n) {
         if (n.channel_message_id) await tg(env, 'deleteMessage', { chat_id: env.CHANNEL_ID, message_id: n.channel_message_id });
         await env.DB.prepare('DELETE FROM notes WHERE id=?').bind(id).run();
+        await logActivity(env, uid, 'حذف جزوه', `${n.title} (#${id})`);
       }
       await ack('🗑 حذف شد');
       return adminNotes(env, chatId, msgId, 0);
@@ -1555,133 +1886,4 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       await ack();
       const cat = await getCat(env, id);
       if (!cat) return adminCats(env, chatId, msgId);
-      const cnt = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes WHERE category_id=?').bind(id).first()).c;
-      return show(env, chatId, msgId, `${icon(cat.name)} <b>${esc(cat.name)}</b>\n\n📄 تعداد جزوه‌ها: ${fa(cnt)}`,
-        kb([[btn('✏️ تغییر نام', `a:cr:${id}`), btn('🗑 حذف', `a:cd:${id}`)], [btn('🔙 بازگشت', 'a:cl')]]));
-    }
-    case 'cr': return prompt('cat_ren', { id }, '✏️ نام جدید دسته‌بندی را ارسال کنید:');
-    case 'cd': {
-      const cat = await getCat(env, id);
-      if (!cat) return ack('⚠️ دسته‌بندی پیدا نشد.', true);
-      const cnt = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes WHERE category_id=?').bind(id).first()).c;
-      if (cnt > 0) return ack(`⛔ این دسته ${fa(cnt)} جزوه دارد. ابتدا جزوه‌ها را حذف یا منتقل کنید.`, true);
-      await ack();
-      return show(env, chatId, msgId, `🗑 دسته‌بندی «<b>${esc(cat.name)}</b>» حذف شود؟`,
-        kb([[btn('✅ بله، حذف شود', `a:cdok:${id}`)], [btn('🔙 انصراف', `a:c:${id}`)]]));
-    }
-    case 'cdok': {
-      const cnt = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes WHERE category_id=?').bind(id).first()).c;
-      if (cnt > 0) return ack('⛔ این دسته هنوز جزوه دارد.', true);
-      await env.DB.prepare('DELETE FROM categories WHERE id=?').bind(id).run();
-      await ack('🗑 حذف شد');
-      return adminCats(env, chatId, msgId);
-    }
-  }
-}
-
-/* ───────────── کرون (بررسی دوره‌ای امتحانات) ───────────── */
-async function runCron(env) {
-  const t = now();
-  const [toPublish, toConfirm] = await Promise.all([
-    env.DB.prepare("SELECT id FROM exams WHERE status='scheduled' AND publish_at<=?").bind(t).all(),
-    env.DB.prepare("SELECT id,title,exam_at FROM exams WHERE status='published' AND confirm_pending=0 AND exam_at<=?").bind(t).all(),
-  ]);
-  if (toPublish.results.length) {
-    await env.DB.batch(toPublish.results.map((r) => env.DB.prepare("UPDATE exams SET status='published',updated_at=? WHERE id=?").bind(t, r.id)));
-  }
-  if (toConfirm.results.length) {
-    await env.DB.batch(toConfirm.results.map((r) => env.DB.prepare('UPDATE exams SET confirm_pending=1,updated_at=? WHERE id=?').bind(t, r.id)));
-  }
-  await renderBoard(env);
-  if (toConfirm.results.length) {
-    const admins = await env.DB.prepare('SELECT user_id FROM admin_sessions WHERE expires_at>?').bind(t).all();
-    for (const a of admins.results) {
-      for (const ex of toConfirm.results) {
-        await tg(env, 'sendMessage', {
-          chat_id: a.user_id,
-          parse_mode: 'HTML',
-          text: `⏳ <b>نیاز به تایید نتیجه</b>\n\n📌 ${esc(ex.title)}\n🗓 ${fmtJalali(ex.exam_at)}\n\nاین امتحان چی شد؟`,
-          reply_markup: kb([
-            [btn('✅ برگزار شد', `a:cf:held:${ex.id}`)],
-            [btn('🔄 تاریخ عوض شد', `a:cf:resch:${ex.id}`)],
-            [btn('❌ برگزار نشد', `a:cf:no:${ex.id}`)],
-          ]),
-        });
-      }
-    }
-  }
-}
-
-/* ───────────── ورودی Worker ───────────── */
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    try {
-      if (url.pathname === '/webhook' && request.method === 'POST') {
-        if (!env.BOT_TOKEN) return new Response('no token', { status: 500 });
-        const secret = await sha256hex('wh:' + env.BOT_TOKEN);
-        if (request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== secret) return new Response('forbidden', { status: 403 });
-        const update = await request.json();
-        ctx.waitUntil(
-          (async () => {
-            try {
-              await initDb(env.DB);
-              if (update.message) await onMessage(update.message, env);
-              else if (update.callback_query) await onCallback(update.callback_query, env);
-            } catch (e) {
-              console.error('update error', e && e.stack ? e.stack : e);
-            }
-          })()
-        );
-        return new Response('ok');
-      }
-
-      if (url.pathname === '/setup') {
-        const missing = ['BOT_TOKEN', 'CHANNEL_ID', 'ADMIN_PASSWORD'].filter((k) => !env[k]);
-        if (!env.DB) missing.push('DB (D1 binding)');
-        if (missing.length) return new Response('❌ تنظیم نشده: ' + missing.join(', '), { status: 500 });
-        if (!(await safeEq(url.searchParams.get('key') || '', env.ADMIN_PASSWORD))) return new Response('forbidden', { status: 403 });
-        await initDb(env.DB);
-        const hook = await tg(env, 'setWebhook', {
-          url: `${url.origin}/webhook`,
-          secret_token: await sha256hex('wh:' + env.BOT_TOKEN),
-          allowed_updates: ['message', 'callback_query'],
-          drop_pending_updates: true,
-        });
-        await tg(env, 'setMyCommands', {
-          commands: [
-            { command: 'start', description: 'کتابخانه جزوه‌ها' },
-            { command: 'admin', description: 'ورود مدیر' },
-            { command: 'cancel', description: 'لغو عملیات' },
-          ],
-        });
-        return new Response(hook.ok ? '✅ Webhook و دیتابیس آماده شد.' : '❌ ' + JSON.stringify(hook), { status: hook.ok ? 200 : 500 });
-      }
-
-      if (url.pathname === '/cron') {
-        if (!env.ADMIN_PASSWORD || !(await safeEq(url.searchParams.get('key') || '', env.ADMIN_PASSWORD))) return new Response('forbidden', { status: 403 });
-        await initDb(env.DB);
-        await runCron(env);
-        return new Response('✅ بررسی دوره‌ای امتحانات اجرا شد.');
-      }
-
-      return new Response('📚 Jozve Library Bot is running.');
-    } catch (e) {
-      console.error(e && e.stack ? e.stack : e);
-      return new Response('error', { status: 500 });
-    }
-  },
-
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(
-      (async () => {
-        try {
-          await initDb(env.DB);
-          await runCron(env);
-        } catch (e) {
-          console.error('cron error', e && e.stack ? e.stack : e);
-        }
-      })()
-    );
-  },
-};
+      const cnt = (await env.DB.prepare('SELECT COUNT
