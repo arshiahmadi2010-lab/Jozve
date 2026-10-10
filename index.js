@@ -34,6 +34,7 @@ const norm = (s) => String(s ?? '').replace(/ي/g, 'ی').replace(/ك/g, 'ک').re
 const trunc = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 const fa = (v) => String(v).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d]).replace(/\./g, '٫');
 const btn = (text, data) => ({ text, callback_data: data });
+const sbtn = (text, data, style) => ({ text, callback_data: data, style });
 const urlBtn = (text, url) => ({ text, url });
 const kb = (rows) => ({ inline_keyboard: rows });
 const icon = (name) => ICONS[name] || '📁';
@@ -86,6 +87,12 @@ function jalaliToGregorian(jy, jm, jd) {
   while (gm < 12 && gDayNo >= gDaysInMonth[gm]) { gDayNo -= gDaysInMonth[gm]; gm++; }
   return [gy, gm + 1, gDayNo + 1];
 }
+function jalaliDateTimeToTs(jy, jm, jd, hh, mi) {
+  const [gy, gm, gd] = jalaliToGregorian(jy, jm, jd);
+  const utcMs = Date.UTC(gy, gm - 1, gd, hh, mi, 0) - TEHRAN_OFFSET_MIN * 60000;
+  const ts = Math.floor(utcMs / 1000);
+  return Number.isFinite(ts) ? ts : null;
+}
 function parseJalaliInput(text) {
   const s = norm(text).replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
   const m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/);
@@ -93,15 +100,45 @@ function parseJalaliInput(text) {
   const jy = +m[1], jm = +m[2], jd = +m[3];
   const hh = m[4] !== undefined ? +m[4] : 8, mi = m[5] !== undefined ? +m[5] : 0;
   if (jm < 1 || jm > 12 || jd < 1 || jd > 31 || hh > 23 || mi > 59) return null;
-  const [gy, gm, gd] = jalaliToGregorian(jy, jm, jd);
-  const utcMs = Date.UTC(gy, gm - 1, gd, hh, mi, 0) - TEHRAN_OFFSET_MIN * 60000;
-  const ts = Math.floor(utcMs / 1000);
-  return Number.isFinite(ts) ? ts : null;
+  return jalaliDateTimeToTs(jy, jm, jd, hh, mi);
+}
+function parseHHMM(text) {
+  const s = norm(text).replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const hh = +m[1], mi = +m[2];
+  if (hh > 23 || mi > 59) return null;
+  return [hh, mi];
 }
 function fmtJalali(ts) {
   try {
     return new Intl.DateTimeFormat('fa-IR-u-ca-persian', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tehran' }).format(new Date(ts * 1000));
   } catch { return fmtDate(ts); }
+}
+function todayJalali() {
+  const parts = new Intl.DateTimeFormat('en-u-ca-persian-nu-latn', { year: 'numeric', month: 'numeric', day: 'numeric', timeZone: 'Asia/Tehran' }).formatToParts(new Date());
+  const o = {}; for (const p of parts) o[p.type] = p.value;
+  return { jy: +o.year, jm: +o.month, jd: +o.day };
+}
+function tehranDayIndex(ts) {
+  const parts = new Intl.DateTimeFormat('en-u-ca-gregory-nu-latn', { year: 'numeric', month: 'numeric', day: 'numeric', timeZone: 'Asia/Tehran' }).formatToParts(new Date(ts * 1000));
+  const o = {}; for (const p of parts) o[p.type] = p.value;
+  return Math.floor(Date.UTC(+o.year, +o.month - 1, +o.day) / 86400000);
+}
+function daysInJalaliMonth(jy, jm) {
+  const [gy1, gm1, gd1] = jalaliToGregorian(jy, jm, 1);
+  const nJy = jm === 12 ? jy + 1 : jy, nJm = jm === 12 ? 1 : jm + 1;
+  const [gy2, gm2, gd2] = jalaliToGregorian(nJy, nJm, 1);
+  return Math.round((Date.UTC(gy2, gm2 - 1, gd2) - Date.UTC(gy1, gm1 - 1, gd1)) / 86400000);
+}
+function jalaliMonthStartWeekday(jy, jm) {
+  const [gy, gm, gd] = jalaliToGregorian(jy, jm, 1);
+  return (new Date(Date.UTC(gy, gm - 1, gd)).getUTCDay() + 1) % 7; // ۰=شنبه
+}
+function normJM(jy, jm) {
+  while (jm < 1) { jm += 12; jy -= 1; }
+  while (jm > 12) { jm -= 12; jy += 1; }
+  return [jy, jm];
 }
 
 async function sha256hex(s) {
@@ -147,6 +184,7 @@ async function initDb(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, hashtags TEXT NOT NULL DEFAULT '', category_id INTEGER NOT NULL, file_id TEXT NOT NULL, file_unique_id TEXT, file_type TEXT NOT NULL DEFAULT 'document', file_name TEXT, file_size INTEGER DEFAULT 0, channel_message_id INTEGER, downloads INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS states (user_id TEXT PRIMARY KEY, state TEXT NOT NULL, data TEXT, updated_at INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS admin_sessions (user_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS admins (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, salt TEXT NOT NULL, pass_hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, last_login INTEGER NOT NULL DEFAULT 0)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, first_name TEXT, username TEXT, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, starts INTEGER NOT NULL DEFAULT 0, downloads INTEGER NOT NULL DEFAULT 0)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS downloads (id INTEGER PRIMARY KEY AUTOINCREMENT, note_id INTEGER NOT NULL, user_id TEXT NOT NULL, ts INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS exams (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', exam_at INTEGER NOT NULL, publish_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'scheduled', confirm_pending INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`),
@@ -157,6 +195,9 @@ async function initDb(db) {
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_dl_user ON downloads(user_id)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_users_seen ON users(last_seen)`),
   ]);
+  for (const col of ["role TEXT NOT NULL DEFAULT 'owner'", 'admin_id INTEGER']) {
+    try { await db.prepare(`ALTER TABLE admin_sessions ADD COLUMN ${col}`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
+  }
   const seeded = await db.prepare(`SELECT 1 AS x FROM states WHERE user_id='meta:seeded'`).first();
   if (!seeded) {
     const t = now();
@@ -181,10 +222,16 @@ const setState = (env, uid, name, data = {}) =>
     .bind(uid, name, JSON.stringify(data), now()).run();
 const clearState = (env, uid) => env.DB.prepare('DELETE FROM states WHERE user_id=?').bind(uid).run();
 
-async function isAdmin(env, uid) {
-  const r = await env.DB.prepare('SELECT 1 AS x FROM admin_sessions WHERE user_id=? AND expires_at>?').bind(uid, now()).first();
-  return !!r;
+async function getRole(env, uid) {
+  const sess = await env.DB.prepare('SELECT role,admin_id FROM admin_sessions WHERE user_id=? AND expires_at>?').bind(uid, now()).first();
+  if (!sess) return null;
+  if (sess.role === 'admin') {
+    const a = await env.DB.prepare('SELECT active FROM admins WHERE id=?').bind(sess.admin_id).first();
+    return a && a.active ? 'admin' : null;
+  }
+  return 'owner';
 }
+const isAdmin = async (env, uid) => !!(await getRole(env, uid));
 const getNote = (env, id) =>
   env.DB.prepare('SELECT n.*, c.name AS cat_name FROM notes n LEFT JOIN categories c ON c.id=n.category_id WHERE n.id=?').bind(id).first();
 const getCat = (env, id) => env.DB.prepare('SELECT * FROM categories WHERE id=?').bind(id).first();
@@ -343,15 +390,18 @@ async function userGet(env, chatId, uid, id, ack) {
 /* ───────────── نمای مدیر ───────────── */
 const cancelKb = kb([[btn('❌ انصراف', 'a:cancel')]]);
 
-function viewPanel(env, chatId, msgId) {
-  return show(env, chatId, msgId, '🛠 <b>پنل مدیریت</b>\n\nیکی از گزینه‌ها را انتخاب کنید:', kb([
-    [btn('➕ افزودن جزوه', 'a:add')],
+async function viewPanel(env, chatId, msgId) {
+  const role = await getRole(env, String(chatId));
+  const rows = [
+    [sbtn('➕ افزودن جزوه', 'a:add', 'success')],
     [btn('📚 مدیریت جزوه‌ها', 'a:nl:0')],
     [btn('📂 مدیریت دسته‌بندی‌ها', 'a:cl')],
     [btn('🗓 امتحانات و آزمون‌ها', 'a:ex')],
     [btn('📊 آمار', 'a:st')],
-    [btn('🏠 نمای کاربران', 'u:home'), btn('🚪 خروج', 'a:lo')],
-  ]));
+  ];
+  if (role === 'owner') rows.push([btn('👥 مدیریت ادمین‌ها', 'a:am')]);
+  rows.push([btn('🏠 نمای کاربران', 'u:home'), sbtn('🚪 خروج', 'a:lo', 'danger')]);
+  return show(env, chatId, msgId, `🛠 <b>پنل مدیریت</b>${role === 'owner' ? ' — مدیر اصلی' : ''}\n\nیکی از گزینه‌ها را انتخاب کنید:`, kb(rows));
 }
 
 async function catButtons(env, prefix) {
@@ -536,9 +586,8 @@ function examLine(e, t) {
   let statusLine;
   if (e.confirm_pending) statusLine = '⏳ در انتظار تایید نتیجه';
   else {
-    const days = Math.floor((e.exam_at - t) / 86400);
-    if (e.exam_at <= t) statusLine = '🔥 امروز!';
-    else if (days === 0) statusLine = '🔥 امروز!';
+    const days = tehranDayIndex(e.exam_at) - tehranDayIndex(t); // اختلاف روز تقویمی واقعی، نه ساعت خام
+    if (days <= 0) statusLine = '🔥 امروز!';
     else if (days === 1) statusLine = '⏰ فردا';
     else statusLine = `⏳ ${fa(days)} روز مانده`;
   }
@@ -546,21 +595,124 @@ function examLine(e, t) {
 }
 async function renderBoard(env) {
   const t = now();
+  // امتحان‌های «برگزار شد» فقط ۱ روز روی تابلو می‌مونن تا پیام بی‌نهایت بزرگ نشه
   const { results } = await env.DB.prepare(
-    `SELECT * FROM exams WHERE status IN ('published','held') ORDER BY (status='held') ASC, exam_at ASC`
-  ).all();
-  const body = results.length ? results.map((e) => examLine(e, t)).join('\n\n') : '🎉 فعلاً امتحان یا آزمونی در پیش نیست.';
-  const text = `🗓 <b>تابلوی امتحانات و آزمون‌ها</b>\n<i>آخرین به‌روزرسانی: ${fmtJalali(t)}</i>\n\n${body}`;
+    `SELECT * FROM exams WHERE status='published' OR (status='held' AND updated_at>=?) ORDER BY (status='held') ASC, exam_at ASC`
+  ).bind(t - 86400).all();
+  const header = `🗓 <b>تابلوی امتحانات و آزمون‌ها</b>\n<i>آخرین به‌روزرسانی: ${fmtJalali(t)}</i>\n\n`;
+  let body;
+  if (!results.length) {
+    body = '🎉 فعلاً امتحان یا آزمونی در پیش نیست.';
+  } else {
+    const lines = results.map((e) => examLine(e, t));
+    const maxLen = 3500; // حاشیه‌ی امن نسبت به سقف ۴۰۹۶ کاراکتری تلگرام
+    const kept = [];
+    let len = 0;
+    for (const line of lines) {
+      const add = (kept.length ? 2 : 0) + line.length;
+      if (len + add > maxLen) break;
+      kept.push(line);
+      len += add;
+    }
+    body = kept.join('\n\n');
+    if (kept.length < lines.length) body += `\n\n… و ${fa(lines.length - kept.length)} مورد دیگر (برای دیدن همه به پنل مدیر مراجعه کنید)`;
+  }
+  const text = header + body;
   const msgId = await getBoardMsgId(env);
   if (msgId) {
     const r = await tg(env, 'editMessageText', { chat_id: env.CHANNEL_ID, message_id: msgId, text, parse_mode: 'HTML' });
     if (r.ok || /not modified/i.test(r.description || '')) return;
+    // فقط وقتی پیام قبلی واقعاً از بین رفته یک پیام جدید بساز؛ برای خطاهای دیگه (موقتی/ناشناخته) دوباره پیام تکراری نفرست
+    if (!/message to edit not found|message can't be edited|message_id_invalid/i.test(r.description || '')) {
+      console.error('renderBoard edit failed', r.description);
+      return;
+    }
   }
   const r2 = await tg(env, 'sendMessage', { chat_id: env.CHANNEL_ID, text, parse_mode: 'HTML' });
   if (r2.ok) await setBoardMsgId(env, r2.result.message_id);
+  else console.error('renderBoard send failed', r2.description);
 }
 
 const examCancelKb = kb([[btn('❌ انصراف', 'a:cancel')]]);
+const JALALI_MONTHS = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
+const JALALI_WEEKDAYS = ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج'];
+const QUICK_TIMES = [480, 510, 540, 570, 600, 660, 720, 840]; // 08:00 08:30 09:00 09:30 10:00 11:00 12:00 14:00
+const hhmm = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+const DATE_STATES = ['exam_date', 'exam_pubdate', 'exam_edit_date', 'exam_edit_pubdate', 'exam_reschedule'];
+const DATE_LABELS = {
+  exam_date: '🗓 <b>تاریخ و ساعت امتحان</b> را انتخاب کنید:',
+  exam_pubdate: '🚀 از چه <b>تاریخی</b> توی کانال منتشر و آپدیت بشه؟',
+  exam_edit_date: '🗓 <b>تاریخ و ساعت جدید</b> امتحان را انتخاب کنید:',
+  exam_edit_pubdate: '🚀 <b>تاریخ/ساعت جدید انتشار</b> را انتخاب کنید:',
+  exam_reschedule: '🗓 <b>تاریخ و ساعت جدید</b> امتحان را انتخاب کنید:',
+};
+
+function renderCalendarKb(jy, jm) {
+  const len = daysInJalaliMonth(jy, jm);
+  const firstWd = jalaliMonthStartWeekday(jy, jm);
+  const [py, pm] = normJM(jy, jm - 1), [ny, nm] = normJM(jy, jm + 1);
+  const rows = [
+    [btn('◀️', `a:xcm:${py}:${pm}`), sbtn(`${JALALI_MONTHS[jm - 1]} ${fa(jy)}`, 'noop', 'primary'), btn('▶️', `a:xcm:${ny}:${nm}`)],
+    JALALI_WEEKDAYS.map((w) => btn(w, 'noop')),
+  ];
+  let week = new Array(firstWd).fill(null);
+  for (let d = 1; d <= len; d++) {
+    week.push(d);
+    if (week.length === 7) { rows.push(week.map((x) => (x ? btn(fa(x), `a:xcd:${jy}:${jm}:${x}`) : btn(' ', 'noop')))); week = []; }
+  }
+  if (week.length) { while (week.length < 7) week.push(null); rows.push(week.map((x) => (x ? btn(fa(x), `a:xcd:${jy}:${jm}:${x}`) : btn(' ', 'noop')))); }
+  rows.push([btn('❌ انصراف', 'a:cancel')]);
+  return rows;
+}
+function timeKb(jy, jm, jd) {
+  const rows = [];
+  for (let i = 0; i < QUICK_TIMES.length; i += 4) rows.push(QUICK_TIMES.slice(i, i + 4).map((mins) => btn(hhmm(mins), `a:xct:${jy}:${jm}:${jd}:${mins}`)));
+  rows.push([btn('⌨️ ساعت دیگر', `a:xctm:${jy}:${jm}:${jd}`)]);
+  rows.push([btn('🔙 بازگشت به تقویم', `a:xcm:${jy}:${jm}`)]);
+  rows.push([btn('❌ انصراف', 'a:cancel')]);
+  return rows;
+}
+async function showDatePicker(env, chatId, msgId, stateName) {
+  const { jy, jm } = todayJalali();
+  const label = (DATE_LABELS[stateName] || '🗓 تاریخ را انتخاب کنید:') +
+    '\n\n<i>یا می‌تونید مستقیم مثل</i> <code>1404/07/15 09:00</code> <i>هم تایپ کنید.</i>';
+  return show(env, chatId, msgId, label, kb(renderCalendarKb(jy, jm)));
+}
+async function proceedWithDate(env, chatId, msgId, uid, st, ts) {
+  const d = st.data;
+  if (st.name.startsWith('adm_') && (await getRole(env, uid)) !== 'owner') {
+    await clearState(env, uid);
+    return sendText(env, chatId, '⛔ فقط مدیر اصلی به این بخش دسترسی دارد.');
+  }
+  switch (st.name) {
+    case 'exam_date':
+      await setState(env, uid, 'exam_note', { ...d, exam_at: ts });
+      return show(env, chatId, msgId, '📝 توضیح اختیاری (مثلاً بخش یا سرفصل امتحان) را ارسال کنید:', kb([[btn('⏭ رد کن', 'a:easn')], [btn('❌ انصراف', 'a:cancel')]]));
+    case 'exam_pubdate':
+      await clearState(env, uid);
+      return finalizeExam(env, chatId, uid, d, ts);
+    case 'exam_edit_date': {
+      const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
+      await env.DB.prepare('UPDATE exams SET exam_at=?,confirm_pending=0,updated_at=? WHERE id=?').bind(ts, now(), d.id).run();
+      await clearState(env, uid);
+      if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
+      return examDetail(env, chatId, msgId, d.id);
+    }
+    case 'exam_edit_pubdate': {
+      const status = ts <= now() ? 'published' : 'scheduled';
+      await env.DB.prepare('UPDATE exams SET publish_at=?,status=?,updated_at=? WHERE id=?').bind(ts, status, now(), d.id).run();
+      await clearState(env, uid);
+      if (status === 'published') await renderBoard(env);
+      return examDetail(env, chatId, msgId, d.id);
+    }
+    case 'exam_reschedule': {
+      await env.DB.prepare("UPDATE exams SET exam_at=?,confirm_pending=0,status='published',updated_at=? WHERE id=?").bind(ts, now(), d.id).run();
+      await clearState(env, uid);
+      await renderBoard(env);
+      return examDetail(env, chatId, msgId, d.id);
+    }
+  }
+}
 
 async function finalizeExam(env, chatId, uid, d, publishAt) {
   const t = now();
@@ -635,6 +787,75 @@ async function examDetail(env, chatId, msgId, id) {
   return show(env, chatId, msgId, text, kb(rows));
 }
 
+/* ───────────── مدیریت ادمین‌ها (فقط مدیر اصلی) ───────────── */
+const PW_ALPHABET = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const randHex = (n) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('');
+const genPassword = (n = 10) => [...crypto.getRandomValues(new Uint8Array(n))].map((x) => PW_ALPHABET[x % PW_ALPHABET.length]).join('');
+async function hashPw(pw, salt) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode(salt), iterations: 20000 }, key, 256);
+  return [...new Uint8Array(bits)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+async function findAdminByPassword(env, pw) {
+  const { results } = await env.DB.prepare('SELECT id,salt,pass_hash FROM admins WHERE active=1').all();
+  for (const a of results) if ((await hashPw(pw, a.salt)) === a.pass_hash) return a;
+  return null;
+}
+// رمز نباید با رمز اصلی یا رمز ادمین دیگری یکی باشد (چون ورود فقط با رمز انجام می‌شود)
+async function pwError(env, pw, exceptId = 0) {
+  if (pw.length < 6 || pw.length > 64 || /\s/.test(pw)) return '⚠️ رمز باید ۶ تا ۶۴ کاراکتر و بدون فاصله باشد.';
+  if (env.ADMIN_PASSWORD && (await safeEq(pw, env.ADMIN_PASSWORD))) return '⚠️ این رمز قابل استفاده نیست. یک رمز دیگر بفرستید.';
+  const { results } = await env.DB.prepare('SELECT salt,pass_hash FROM admins WHERE id!=?').bind(exceptId).all();
+  for (const a of results) if ((await hashPw(pw, a.salt)) === a.pass_hash) return '⚠️ این رمز قابل استفاده نیست. یک رمز دیگر بفرستید.';
+  return null;
+}
+async function uniquePassword(env, exceptId = 0) {
+  for (let i = 0; i < 5; i++) { const pw = genPassword(); if (!(await pwError(env, pw, exceptId))) return pw; }
+  return genPassword(12);
+}
+async function createAdmin(env, name, pw) {
+  const salt = randHex(16), h = await hashPw(pw, salt);
+  const r = await env.DB.prepare('INSERT INTO admins(name,salt,pass_hash,active,created_at,last_login) VALUES(?,?,?,1,?,0)').bind(name, salt, h, now()).run();
+  return r.meta.last_row_id;
+}
+async function setAdminPassword(env, id, pw) {
+  const salt = randHex(16), h = await hashPw(pw, salt);
+  await env.DB.batch([
+    env.DB.prepare('UPDATE admins SET salt=?,pass_hash=? WHERE id=?').bind(salt, h, id),
+    env.DB.prepare('DELETE FROM admin_sessions WHERE admin_id=?').bind(id), // با تغییر رمز، نشست‌های قبلی بسته می‌شود
+  ]);
+}
+const delPwMsg = (env, m) => tg(env, 'deleteMessage', { chat_id: m.chat.id, message_id: m.message_id });
+
+async function admList(env, chatId, msgId, page) {
+  const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM admins').first()).c;
+  page = clampPage(page, total);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const { results } = await env.DB.prepare('SELECT id,name,active FROM admins ORDER BY id LIMIT ? OFFSET ?').bind(PAGE_SIZE, page * PAGE_SIZE).all();
+  const rows = results.map((a) => [btn(`${a.active ? '🟢' : '🔴'} ${trunc(a.name, 40)}`, `a:amd:${a.id}`)]);
+  rows.push(...pager(page, pages, 'a:aml:'));
+  rows.push([sbtn('➕ افزودن ادمین', 'a:ama', 'success')]);
+  rows.push([btn('🔙 پنل مدیریت', 'a:panel')]);
+  const text = `👥 <b>مدیریت ادمین‌ها</b>\n\n👑 مدیر اصلی: شما (با رمز اصلی)\n👤 ادمین‌های ثبت‌شده: ${fa(total)}\n\n` +
+    (total ? '🟢 فعال  🔴 غیرفعال' : 'هنوز ادمین دیگری اضافه نشده است.') +
+    '\n\n<i>هر ادمین رمز مخصوص خودش را دارد و به همه‌ی بخش‌ها به‌جز «مدیریت ادمین‌ها» دسترسی دارد.</i>';
+  return show(env, chatId, msgId, text, kb(rows));
+}
+async function admDetail(env, chatId, msgId, id, extra = '') {
+  const a = await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(id).first();
+  if (!a) return show(env, chatId, msgId, '⚠️ ادمین پیدا نشد.', kb([[btn('🔙 لیست', 'a:aml:0')]]));
+  const online = (await env.DB.prepare('SELECT COUNT(*) AS c FROM admin_sessions WHERE admin_id=? AND expires_at>?').bind(id, now()).first()).c;
+  const text = `👤 <b>${esc(a.name)}</b>\n\n📌 وضعیت: ${a.active ? '🟢 فعال' : '🔴 غیرفعال'}\n🗓 ساخته‌شده: ${fmtDate(a.created_at)}\n` +
+    `🕒 آخرین ورود: ${a.last_login ? fmtDateTime(a.last_login) : '—'}\n🔓 نشست فعال: ${online ? 'بله' : 'خیر'}` + extra;
+  return show(env, chatId, msgId, text, kb([
+    [btn('✏️ تغییر نام', `a:amn:${id}`), btn('🔑 تغییر رمز', `a:amr:${id}`)],
+    [btn('🎲 رمز تصادفی جدید', `a:amg:${id}`)],
+    [btn(a.active ? '⏸ غیرفعال کردن' : '▶️ فعال کردن', `a:amt:${id}`), btn('🚪 خروج اجباری', `a:amo:${id}`)],
+    [sbtn('🗑 حذف ادمین', `a:amx:${id}`, 'danger')],
+    [btn('🔙 لیست', 'a:aml:0')],
+  ]));
+}
+
 /* ───────────── ورود مدیر ───────────── */
 async function getLock(env, uid) {
   const r = await env.DB.prepare('SELECT data FROM states WHERE user_id=?').bind('lock:' + uid).first();
@@ -655,14 +876,23 @@ async function doLogin(env, m, uid) {
   const chatId = m.chat.id;
   const lock = await getLock(env, uid);
   if (lock.until > now()) return sendText(env, chatId, `⛔ ورود تا ${fa(Math.ceil((lock.until - now()) / 60))} دقیقه دیگر مسدود است.`);
-  const ok = !!m.text && !!env.ADMIN_PASSWORD && (await safeEq(m.text.trim(), env.ADMIN_PASSWORD));
+  const pw = (m.text || '').trim();
+  let role = null, adminId = null;
+  if (pw) {
+    if (env.ADMIN_PASSWORD && (await safeEq(pw, env.ADMIN_PASSWORD))) role = 'owner';
+    else {
+      const a = await findAdminByPassword(env, pw);
+      if (a) { role = 'admin'; adminId = a.id; }
+    }
+  }
   await tg(env, 'deleteMessage', { chat_id: chatId, message_id: m.message_id });
-  if (ok) {
+  if (role) {
     const t = now();
     await env.DB.batch([
       env.DB.prepare('DELETE FROM admin_sessions WHERE expires_at<?').bind(t),
-      env.DB.prepare('INSERT OR REPLACE INTO admin_sessions(user_id,created_at,expires_at) VALUES(?,?,?)').bind(uid, t, t + SESSION_TTL),
+      env.DB.prepare('INSERT OR REPLACE INTO admin_sessions(user_id,created_at,expires_at,role,admin_id) VALUES(?,?,?,?,?)').bind(uid, t, t + SESSION_TTL, role, adminId),
       env.DB.prepare('DELETE FROM states WHERE user_id IN (?,?)').bind('lock:' + uid, uid),
+      ...(adminId ? [env.DB.prepare('UPDATE admins SET last_login=? WHERE id=?').bind(t, adminId)] : []),
     ]);
     return viewPanel(env, chatId, null);
   }
@@ -842,17 +1072,52 @@ async function onAdminState(env, m, uid, st, text) {
       await clearState(env, uid);
       return adminCats(env, chatId, null);
     }
+    case 'adm_name': {
+      const name = trunc(norm(text), 40);
+      if (!name) return sendText(env, chatId, '⚠️ نام معتبر ارسال کنید.', cancelKb);
+      await setState(env, uid, 'adm_pass', { name });
+      return sendText(env, chatId, `🔑 رمز مخصوص «<b>${esc(name)}</b>» را ارسال کنید.\n<i>۶ تا ۶۴ کاراکتر، بدون فاصله. پیام رمز بعد از دریافت حذف می‌شود.</i>`,
+        kb([[btn('🎲 ساخت رمز تصادفی', 'a:amgn')], [btn('❌ انصراف', 'a:cancel')]]));
+    }
+    case 'adm_pass': {
+      const pw = text.trim();
+      await delPwMsg(env, m);
+      const err = await pwError(env, pw);
+      if (err) return sendText(env, chatId, err, kb([[btn('🎲 ساخت رمز تصادفی', 'a:amgn')], [btn('❌ انصراف', 'a:cancel')]]));
+      const id = await createAdmin(env, d.name, pw);
+      await clearState(env, uid);
+      return admDetail(env, chatId, null, id, '\n\n✅ ادمین ساخته شد. رمز را به خودش بدهید؛ برای امنیت، رمز دوباره نمایش داده نمی‌شود.');
+    }
+    case 'adm_rename': {
+      const name = trunc(norm(text), 40);
+      if (!name) return sendText(env, chatId, '⚠️ نام معتبر ارسال کنید.', cancelKb);
+      await env.DB.prepare('UPDATE admins SET name=? WHERE id=?').bind(name, d.id).run();
+      await clearState(env, uid);
+      return admDetail(env, chatId, null, d.id);
+    }
+    case 'adm_newpass': {
+      const pw = text.trim();
+      await delPwMsg(env, m);
+      const err = await pwError(env, pw, d.id);
+      if (err) return sendText(env, chatId, err, cancelKb);
+      await setAdminPassword(env, d.id, pw);
+      await clearState(env, uid);
+      return admDetail(env, chatId, null, d.id, '\n\n✅ رمز تغییر کرد و نشست‌های قبلی این ادمین بسته شد.');
+    }
     case 'exam_title': {
       const title = trunc(norm(text), 150);
       if (!title) return sendText(env, chatId, '⚠️ عنوان معتبر ارسال کنید.', examCancelKb);
       await setState(env, uid, 'exam_date', { title });
-      return sendText(env, chatId, '🗓 تاریخ و ساعت امتحان را به شمسی ارسال کنید.\nمثال: <code>1404/07/15 09:00</code>', examCancelKb);
+      return showDatePicker(env, chatId, null, 'exam_date');
     }
-    case 'exam_date': {
+    case 'exam_date':
+    case 'exam_pubdate':
+    case 'exam_edit_date':
+    case 'exam_edit_pubdate':
+    case 'exam_reschedule': {
       const ts = parseJalaliInput(text);
       if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/15 09:00</code>', examCancelKb);
-      await setState(env, uid, 'exam_note', { ...d, exam_at: ts });
-      return sendText(env, chatId, '📝 توضیح اختیاری (مثلاً بخش یا سرفصل امتحان) را ارسال کنید:', kb([[btn('⏭ رد کن', 'a:easn')], [btn('❌ انصراف', 'a:cancel')]]));
+      return proceedWithDate(env, chatId, null, uid, st, ts);
     }
     case 'exam_note': {
       const note = trunc(norm(text), 300);
@@ -860,19 +1125,11 @@ async function onAdminState(env, m, uid, st, text) {
       return sendText(env, chatId, '🚀 از چه زمانی این امتحان توی تابلوی کانال نمایش داده بشه و آپدیت بخوره؟',
         kb([[btn('🔴 همین الان', 'a:eapn')], [btn('🗓 تاریخ خاص', 'a:eapl')], [btn('❌ انصراف', 'a:cancel')]]));
     }
-    case 'exam_pubdate': {
-      const ts = parseJalaliInput(text);
-      if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/10 08:00</code>', examCancelKb);
-      return finalizeExam(env, chatId, uid, d, ts);
-    }
-    case 'exam_reschedule': {
-      const ts = parseJalaliInput(text);
-      if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/20 09:00</code>', examCancelKb);
-      await env.DB.prepare("UPDATE exams SET exam_at=?,confirm_pending=0,status='published',updated_at=? WHERE id=?").bind(ts, now(), d.id).run();
-      await clearState(env, uid);
-      await renderBoard(env);
-      await sendText(env, chatId, '✅ تاریخ امتحان به‌روزرسانی شد.');
-      return examDetail(env, chatId, null, d.id);
+    case 'time_manual': {
+      const parsed = parseHHMM(text);
+      if (!parsed) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>09:30</code>', examCancelKb);
+      const ts = jalaliDateTimeToTs(d.jy, d.jm, d.jd, parsed[0], parsed[1]);
+      return proceedWithDate(env, chatId, null, uid, { name: d.origState, data: d.origData }, ts);
     }
     case 'exam_edit_title': {
       const title = trunc(norm(text), 150);
@@ -883,30 +1140,12 @@ async function onAdminState(env, m, uid, st, text) {
       if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
       return examDetail(env, chatId, null, d.id);
     }
-    case 'exam_edit_date': {
-      const ts = parseJalaliInput(text);
-      if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/20 09:00</code>', examCancelKb);
-      const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
-      await env.DB.prepare('UPDATE exams SET exam_at=?,confirm_pending=0,updated_at=? WHERE id=?').bind(ts, now(), d.id).run();
-      await clearState(env, uid);
-      if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
-      return examDetail(env, chatId, null, d.id);
-    }
     case 'exam_edit_note': {
       const note = text.trim() === '-' ? '' : trunc(norm(text), 300);
       const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
       await env.DB.prepare('UPDATE exams SET note=?,updated_at=? WHERE id=?').bind(note, now(), d.id).run();
       await clearState(env, uid);
       if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
-      return examDetail(env, chatId, null, d.id);
-    }
-    case 'exam_edit_pubdate': {
-      const ts = parseJalaliInput(text);
-      if (ts == null) return sendText(env, chatId, '⚠️ فرمت درست نیست. مثال: <code>1404/07/12 08:00</code>', examCancelKb);
-      const status = ts <= now() ? 'published' : 'scheduled';
-      await env.DB.prepare('UPDATE exams SET publish_at=?,status=?,updated_at=? WHERE id=?').bind(ts, status, now(), d.id).run();
-      await clearState(env, uid);
-      if (status === 'published') await renderBoard(env);
       return examDetail(env, chatId, null, d.id);
     }
     default:
@@ -963,6 +1202,7 @@ async function userRoute(env, p, num, chatId, msgId, uid, ack) {
 
 async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
   const id = num(2);
+  if (p[1].startsWith('am') && (await getRole(env, uid)) !== 'owner') return ack('⛔ فقط مدیر اصلی به این بخش دسترسی دارد.', true);
   const prompt = async (state, data, text) => {
     await ack();
     await setState(env, uid, state, data);
@@ -982,6 +1222,55 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
     case 'st': await ack(); return adminStats(env, chatId, msgId);
     case 'ux': await ack(); return adminUsers(env, chatId, msgId, id);
     case 'nd': await ack(); return adminNoteDownloaders(env, chatId, msgId, id, num(3));
+
+    /* مدیریت ادمین‌ها */
+    case 'am': await ack(); await clearState(env, uid); return admList(env, chatId, msgId, 0);
+    case 'aml': await ack(); return admList(env, chatId, msgId, id);
+    case 'amd': await ack(); await clearState(env, uid); return admDetail(env, chatId, msgId, id);
+    case 'ama': return prompt('adm_name', {}, '➕ <b>افزودن ادمین</b>\n\n👤 یک نام برای شناسایی این ادمین بفرستید (مثلاً «مبصر کلاس ۱۰۱»):');
+    case 'amgn': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'adm_pass') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      const pw = await uniquePassword(env);
+      const aid = await createAdmin(env, st.data.name, pw);
+      await clearState(env, uid);
+      return admDetail(env, chatId, msgId, aid, `\n\n🔑 رمز: <code>${esc(pw)}</code>\n⚠️ این رمز فقط همین یک‌بار نمایش داده می‌شود. آن را کپی کنید و بعد این پیام را پاک کنید.`);
+    }
+    case 'amn': return prompt('adm_rename', { id }, '✏️ نام جدید ادمین را ارسال کنید:');
+    case 'amr': return prompt('adm_newpass', { id }, '🔑 رمز جدید را ارسال کنید (۶ تا ۶۴ کاراکتر، بدون فاصله).\n<i>پیام رمز بعد از دریافت حذف می‌شود.</i>');
+    case 'amg': {
+      const pw = await uniquePassword(env, id);
+      await setAdminPassword(env, id, pw);
+      await ack('🎲 رمز جدید ساخته شد');
+      return admDetail(env, chatId, msgId, id, `\n\n🔑 رمز جدید: <code>${esc(pw)}</code>\n⚠️ فقط همین یک‌بار نمایش داده می‌شود؛ نشست‌های قبلی بسته شد.`);
+    }
+    case 'amt': {
+      const a = await env.DB.prepare('SELECT active FROM admins WHERE id=?').bind(id).first();
+      if (!a) return ack('⚠️ ادمین پیدا نشد.', true);
+      await env.DB.prepare('UPDATE admins SET active=? WHERE id=?').bind(a.active ? 0 : 1, id).run();
+      if (a.active) await env.DB.prepare('DELETE FROM admin_sessions WHERE admin_id=?').bind(id).run();
+      await ack(a.active ? '⏸ غیرفعال شد' : '▶️ فعال شد');
+      return admDetail(env, chatId, msgId, id);
+    }
+    case 'amo':
+      await env.DB.prepare('DELETE FROM admin_sessions WHERE admin_id=?').bind(id).run();
+      await ack('🚪 نشست‌های این ادمین بسته شد');
+      return admDetail(env, chatId, msgId, id);
+    case 'amx': {
+      await ack();
+      const a = await env.DB.prepare('SELECT name FROM admins WHERE id=?').bind(id).first();
+      if (!a) return admList(env, chatId, msgId, 0);
+      return show(env, chatId, msgId, `🗑 ادمین «<b>${esc(a.name)}</b>» حذف شود؟ دسترسی‌اش فوراً قطع می‌شود.`,
+        kb([[sbtn('✅ بله، حذف کن', `a:amxok:${id}`, 'danger')], [btn('🔙 انصراف', `a:amd:${id}`)]]));
+    }
+    case 'amxok':
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM admin_sessions WHERE admin_id=?').bind(id),
+        env.DB.prepare('DELETE FROM admins WHERE id=?').bind(id),
+      ]);
+      await ack('🗑 حذف شد');
+      return admList(env, chatId, msgId, 0);
 
     /* امتحانات و آزمون‌ها */
     case 'ex': await ack(); await clearState(env, uid); return examMenu(env, chatId, msgId);
@@ -1006,14 +1295,52 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       if (!st || st.name !== 'exam_pub') return ack('⏱ عملیات منقضی شده است.', true);
       await ack();
       await setState(env, uid, 'exam_pubdate', st.data);
-      return show(env, chatId, msgId, '🗓 از چه تاریخی (شمسی) شروع کنم به نمایش و آپدیتش توی کانال؟\nمثال: <code>1404/07/10 08:00</code>', examCancelKb);
+      return showDatePicker(env, chatId, msgId, 'exam_pubdate');
     }
     case 'el': await ack(); await clearState(env, uid); return examList(env, chatId, msgId, id);
     case 'ed': await ack(); await clearState(env, uid); return examDetail(env, chatId, msgId, id);
     case 'et': return prompt('exam_edit_title', { id }, '✏️ عنوان جدید امتحان را ارسال کنید:');
-    case 'edt': return prompt('exam_edit_date', { id }, '🗓 تاریخ و ساعت جدید (شمسی) را ارسال کنید:\nمثال: <code>1404/07/20 09:00</code>');
+    case 'edt': {
+      await ack();
+      await setState(env, uid, 'exam_edit_date', { id });
+      return showDatePicker(env, chatId, msgId, 'exam_edit_date');
+    }
     case 'en': return prompt('exam_edit_note', { id }, '📝 توضیح جدید را ارسال کنید.\nبرای حذف توضیح، فقط <code>-</code> بفرستید.');
-    case 'epd': return prompt('exam_edit_pubdate', { id }, '🚀 تاریخ/ساعت جدید انتشار (شمسی) را ارسال کنید:\nمثال: <code>1404/07/12 08:00</code>');
+    case 'epd': {
+      await ack();
+      await setState(env, uid, 'exam_edit_pubdate', { id });
+      return showDatePicker(env, chatId, msgId, 'exam_edit_pubdate');
+    }
+    case 'xcm': {
+      const st = await getState(env, uid);
+      if (!st || !DATE_STATES.includes(st.name)) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      const [jy, jm] = normJM(num(2), num(3));
+      return show(env, chatId, msgId, DATE_LABELS[st.name] + '\n\n<i>یا می‌تونید مستقیم مثل</i> <code>1404/07/15 09:00</code> <i>هم تایپ کنید.</i>', kb(renderCalendarKb(jy, jm)));
+    }
+    case 'xcd': {
+      const st = await getState(env, uid);
+      if (!st || !DATE_STATES.includes(st.name)) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      const jy = num(2), jm = num(3), jd = num(4);
+      return show(env, chatId, msgId, `🕒 ساعت را انتخاب کنید:\n🗓 ${fa(jd)} ${JALALI_MONTHS[jm - 1]} ${fa(jy)}`, kb(timeKb(jy, jm, jd)));
+    }
+    case 'xct': {
+      const st = await getState(env, uid);
+      if (!st || !DATE_STATES.includes(st.name)) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      const jy = num(2), jm = num(3), jd = num(4), mins = num(5);
+      const ts = jalaliDateTimeToTs(jy, jm, jd, Math.floor(mins / 60), mins % 60);
+      return proceedWithDate(env, chatId, msgId, uid, st, ts);
+    }
+    case 'xctm': {
+      const st = await getState(env, uid);
+      if (!st || !DATE_STATES.includes(st.name)) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      const jy = num(2), jm = num(3), jd = num(4);
+      await setState(env, uid, 'time_manual', { origState: st.name, origData: st.data, jy, jm, jd });
+      return show(env, chatId, msgId, '⌨️ ساعت را به فرمت <code>HH:MM</code> ارسال کنید (مثلاً <code>09:30</code>):', examCancelKb);
+    }
     case 'ec': {
       await ack();
       const e = await env.DB.prepare('SELECT title FROM exams WHERE id=?').bind(id).first();
@@ -1060,7 +1387,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       if (action === 'resch') {
         await ack();
         await setState(env, uid, 'exam_reschedule', { id: exId });
-        return show(env, chatId, msgId, '🗓 تاریخ و ساعت جدید امتحان را به شمسی ارسال کنید:\nمثال: <code>1404/07/20 09:00</code>', examCancelKb);
+        return showDatePicker(env, chatId, msgId, 'exam_reschedule');
       }
       return ack();
     }
