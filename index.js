@@ -40,21 +40,58 @@ const DEFAULT_SETTINGS = {
   audit_log_enabled: '1',
   broadcast_batch_size: '25',
   broadcast_delay_ms: '1100',
+  exam_reminder_enabled: '1',
+  exam_reminder_hour: '18',
+  ui_title: '📚 کتابخانه جزوه',
+  ui_greeting: 'سلام {name} 👋',
+  ui_color_cat: 'primary',
+  ui_color_action: 'success',
+  ui_color_share: '',
+  ui_color_admin: 'primary',
+  sec_search: '1',
+  sec_latest: '1',
+  sec_hot: '1',
+  sec_random: '1',
+  sec_share: '1',
+  sec_next_exam: '1',
+  sec_stats: '1',
 };
+const COLOR_OPTIONS = [
+  { v: 'primary', label: '🔵 آبی' },
+  { v: 'success', label: '🟢 سبز' },
+  { v: 'danger', label: '🔴 قرمز' },
+  { v: '', label: '⚪ بدون رنگ' },
+];
 const SETTINGS_DEF = [
-  { key: 'new_badge_enabled', type: 'bool', label: 'نشان 🆕 جدید' },
-  { key: 'new_badge_hours', type: 'num', label: 'مدت نشان 🆕 (ساعت)', min: 1, max: 240 },
-  { key: 'hot_badge_enabled', type: 'bool', label: 'نشان 🔥 داغ' },
-  { key: 'hot_badge_min_downloads', type: 'num', label: 'حد نصاب 🔥 داغ (دانلود)', min: 1, max: 100000 },
-  { key: 'card_announce_enabled', type: 'bool', label: 'قالب کارتی اعلان کانال' },
-  { key: 'board_countdown_enabled', type: 'bool', label: 'شمارش‌معکوس تابلوی امتحانات' },
-  { key: 'duplicate_check_enabled', type: 'bool', label: 'تشخیص آپلود تکراری' },
-  { key: 'corrupt_check_enabled', type: 'bool', label: 'بررسی خودکار فایل خراب' },
-  { key: 'audit_log_enabled', type: 'bool', label: 'ثبت گزارش فعالیت ادمین‌ها' },
-  { key: 'broadcast_batch_size', type: 'num', label: 'تعداد ارسال هم‌زمان پیام همگانی', min: 1, max: 100 },
+  { key: 'ui_title', type: 'text', label: 'عنوان صفحه اصلی', max: 60, group: 'ui' },
+  { key: 'ui_greeting', type: 'text', label: 'متن خوش‌آمدگویی ({name}=اسم کاربر)', max: 150, group: 'ui' },
+  { key: 'ui_color_cat', type: 'color', label: 'رنگ دکمه‌های دسته‌بندی', group: 'ui' },
+  { key: 'ui_color_action', type: 'color', label: 'رنگ دکمه‌های عملیات (دریافت/جستجو)', group: 'ui' },
+  { key: 'ui_color_share', type: 'color', label: 'رنگ دکمه اشتراک‌گذاری', group: 'ui' },
+  { key: 'ui_color_admin', type: 'color', label: 'رنگ دکمه‌های پنل مدیریت', group: 'ui' },
+  { key: 'sec_search', type: 'bool', label: 'بخش 🔍 جستجو', group: 'ui' },
+  { key: 'sec_latest', type: 'bool', label: 'بخش 🆕 جدیدترین‌ها', group: 'ui' },
+  { key: 'sec_hot', type: 'bool', label: 'بخش 🔥 پرطرفدارها', group: 'ui' },
+  { key: 'sec_random', type: 'bool', label: 'بخش 🎲 جزوه‌ی شانسی', group: 'ui' },
+  { key: 'sec_share', type: 'bool', label: 'دکمه 📤 اشتراک‌گذاری', group: 'ui' },
+  { key: 'sec_next_exam', type: 'bool', label: 'نمایش امتحان بعدی در خانه', group: 'ui' },
+  { key: 'sec_stats', type: 'bool', label: 'نمایش خط آمار در خانه', group: 'ui' },
+  { key: 'new_badge_enabled', type: 'bool', label: 'نشان 🆕 جدید', group: 'ui' },
+  { key: 'new_badge_hours', type: 'num', label: 'مدت نشان 🆕 (ساعت)', min: 1, max: 240, group: 'ui' },
+  { key: 'hot_badge_enabled', type: 'bool', label: 'نشان 🔥 داغ', group: 'ui' },
+  { key: 'hot_badge_min_downloads', type: 'num', label: 'حد نصاب 🔥 داغ (دانلود)', min: 1, max: 100000, group: 'ui' },
+  { key: 'card_announce_enabled', type: 'bool', label: 'قالب کارتی اعلان کانال', group: 'sys' },
+  { key: 'board_countdown_enabled', type: 'bool', label: 'شمارش‌معکوس تابلوی امتحانات', group: 'sys' },
+  { key: 'exam_reminder_enabled', type: 'bool', label: 'یادآور «فردا امتحان داری» در کانال', group: 'sys' },
+  { key: 'exam_reminder_hour', type: 'num', label: 'ساعت ارسال یادآور (۰ تا ۲۳)', min: 0, max: 23, group: 'sys' },
+  { key: 'duplicate_check_enabled', type: 'bool', label: 'تشخیص آپلود تکراری', group: 'sys' },
+  { key: 'corrupt_check_enabled', type: 'bool', label: 'بررسی خودکار فایل خراب', group: 'sys' },
+  { key: 'audit_log_enabled', type: 'bool', label: 'ثبت گزارش فعالیت ادمین‌ها', group: 'sys' },
+  { key: 'broadcast_batch_size', type: 'num', label: 'تعداد ارسال هم‌زمان پیام همگانی', min: 1, max: 100, group: 'sys' },
 ];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const digits = (s) => String(s ?? '').replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+const FILE_ICON = { document: '📄', photo: '🖼', video: '🎞', audio: '🎵' };
 
 /* ───────────── ابزارهای عمومی ───────────── */
 const now = () => Math.floor(Date.now() / 1000);
@@ -67,16 +104,51 @@ const sbtn = (text, data, style) => ({ text, callback_data: data, style });
 const urlBtn = (text, url) => ({ text, url });
 const kb = (rows) => ({ inline_keyboard: rows });
 const icon = (name) => ICONS[name] || '📁';
+const catIcon = (cat) => (cat && cat.emoji) || icon(cat ? cat.name : '');
 
 function fmtSize(b) {
   if (!b) return '—';
   if (b < 1048576) return fa((b / 1024).toFixed(0)) + ' کیلوبایت';
   return fa((b / 1048576).toFixed(1)) + ' مگابایت';
 }
+const DIVIDER = '┄┄┄┄┄┄┄┄┄┄┄┄┄┄';
+function timeGreeting(ts) {
+  let hour = 12;
+  try { hour = parseInt(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Asia/Tehran' }).format(new Date(ts * 1000)), 10); } catch {}
+  if (hour >= 5 && hour < 12) return 'صبح بخیر ☀️';
+  if (hour >= 12 && hour < 17) return 'ظهر بخیر 🌤';
+  if (hour >= 17 && hour < 21) return 'عصر بخیر 🌇';
+  return 'شب بخیر 🌙';
+}
 function fmtDate(ts) {
   try {
     return new Date(ts * 1000).toLocaleDateString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Tehran' });
   } catch { return '—'; }
+}
+async function topCategoryTags(env, catId, limit = 3) {
+  const { results } = await env.DB.prepare("SELECT hashtags FROM notes WHERE category_id=? AND hashtags<>''").bind(catId).all();
+  const freq = {};
+  for (const r of results) for (const t of (r.hashtags || '').split(/\s+/)) if (t) freq[t] = (freq[t] || 0) + 1;
+  return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, limit).map((x) => x[0]);
+}
+const STOPWORDS = new Set(['برای', 'است', 'جزوه', 'فصل', 'درس', 'این', 'بخش', 'کامل', 'جلسه']);
+function suggestTags(catName, title, freqTags) {
+  const out = [];
+  const add = (t) => { if (t && t.length > 1 && !out.includes(t)) out.push(t); };
+  add('#' + norm(catName).replace(/\s+/g, '_'));
+  for (const t of freqTags) add(t);
+  const words = norm(title).split(/\s+/).map((w) => w.replace(/[^\p{L}\p{N}_]/gu, '')).filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+  for (const w of words) { add('#' + w); if (out.length >= 8) break; }
+  return out.slice(0, 8);
+}
+async function viewTagPicker(env, chatId, msgId, data) {
+  const rows = data.suggestions.map((t, i) => [btn(`${data.selected.includes(i) ? '✅' : '⬜'} ${t}`, `a:tgpick:${i}`)]);
+  rows.push([btn('✅ تایید و ادامه', 'a:tgok')]);
+  rows.push([btn('✏️ هشتگ دستی', 'a:tgcustom'), btn('⏭ بدون هشتگ', 'a:skiptags')]);
+  rows.push([btn('❌ انصراف', 'a:cancel')]);
+  return show(env, chatId, msgId,
+    `🏷 <b>هشتگ‌های پیشنهادی</b>\n\nبر اساس عنوان و الگوی این دسته پیشنهاد دادم؛ هرکدوم رو می‌خوای لمس کن تا تیک بخوره:`,
+    kb(rows));
 }
 function parseTags(text) {
   const seen = new Set();
@@ -142,6 +214,13 @@ function parseHHMM(text) {
 function fmtJalali(ts) {
   try {
     return new Intl.DateTimeFormat('fa-IR-u-ca-persian', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tehran' }).format(new Date(ts * 1000));
+  } catch { return fmtDate(ts); }
+}
+function fmtExamDate(ts) {
+  try {
+    const datePart = new Intl.DateTimeFormat('fa-IR-u-ca-persian', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Tehran' }).format(new Date(ts * 1000));
+    const weekday = new Intl.DateTimeFormat('fa-IR', { weekday: 'long', timeZone: 'Asia/Tehran' }).format(new Date(ts * 1000));
+    return `${datePart} (${weekday})`;
   } catch { return fmtDate(ts); }
 }
 function todayJalali() {
@@ -233,6 +312,11 @@ async function initDb(db) {
   for (const col of ['broken INTEGER NOT NULL DEFAULT 0', 'checked_at INTEGER NOT NULL DEFAULT 0']) {
     try { await db.prepare(`ALTER TABLE notes ADD COLUMN ${col}`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
   }
+  try { await db.prepare(`ALTER TABLE categories ADD COLUMN emoji TEXT`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
+  for (const col of ['permissions TEXT', 'expires_at INTEGER NOT NULL DEFAULT 0']) {
+    try { await db.prepare(`ALTER TABLE admins ADD COLUMN ${col}`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
+  }
+  try { await db.prepare(`ALTER TABLE exams ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
   const seeded = await db.prepare(`SELECT 1 AS x FROM states WHERE user_id='meta:seeded'`).first();
   if (!seeded) {
     const t = now();
@@ -258,14 +342,43 @@ const setState = (env, uid, name, data = {}) =>
     .bind(uid, name, JSON.stringify(data), now()).run();
 const clearState = (env, uid) => env.DB.prepare('DELETE FROM states WHERE user_id=?').bind(uid).run();
 
-async function getRole(env, uid) {
+const MODULES = [
+  { key: 'notes', label: '📚 جزوه‌ها' },
+  { key: 'cats', label: '📂 دسته‌بندی‌ها' },
+  { key: 'exams', label: '🗓 امتحانات' },
+  { key: 'stats', label: '📊 آمار' },
+];
+const MODULE_PREFIXES = {
+  notes: ['add', 'ac', 'skiptags', 'tgpick', 'tgok', 'tgcustom', 'ac_force', 'rf_force', 'nl', 'n', 'rn', 'rh', 'rf', 'rc', 'sc', 'gt', 'del', 'delok', 'nd', 'up', 'ubk', 'uc', 'ul', 'us', 'uv', 'ut', 'uh', 'uk', 'usc', 'uok', 'nq', 'nlq', 'nlc', 'nqc', 'bstart', 'bsel', 'bdel', 'bdelok', 'bmove', 'bmoveto', 'bcancel'],
+  cats: ['cl', 'ca', 'c', 'cr', 'ce', 'cd', 'cdok'],
+  exams: ['ex', 'ea', 'easn', 'eapn', 'eapl', 'el', 'ed', 'et', 'edt', 'en', 'epd', 'xcm', 'xcd', 'xct', 'xctm', 'ec', 'ecok', 'edel', 'edelok', 'cf'],
+  stats: ['st', 'ux'],
+};
+const prefixModule = (p1) => Object.keys(MODULE_PREFIXES).find((mod) => MODULE_PREFIXES[mod].includes(p1)) || null;
+const hasPerm = (perms, mod) => !perms || perms.includes(mod);
+
+async function getSessionInfo(env, uid) {
   const sess = await env.DB.prepare('SELECT role,admin_id FROM admin_sessions WHERE user_id=? AND expires_at>?').bind(uid, now()).first();
   if (!sess) return null;
   if (sess.role === 'admin') {
-    const a = await env.DB.prepare('SELECT active FROM admins WHERE id=?').bind(sess.admin_id).first();
-    return a && a.active ? 'admin' : null;
+    const a = await env.DB.prepare('SELECT active,expires_at,permissions FROM admins WHERE id=?').bind(sess.admin_id).first();
+    if (!a || !a.active) return null;
+    if (a.expires_at && a.expires_at <= now()) {
+      await env.DB.batch([
+        env.DB.prepare('UPDATE admins SET active=0 WHERE id=?').bind(sess.admin_id),
+        env.DB.prepare('DELETE FROM admin_sessions WHERE admin_id=?').bind(sess.admin_id),
+      ]);
+      return null;
+    }
+    let perms = null;
+    try { perms = a.permissions ? JSON.parse(a.permissions) : null; } catch { perms = null; }
+    return { role: 'admin', adminId: sess.admin_id, perms };
   }
-  return 'owner';
+  return { role: 'owner', adminId: 0, perms: null };
+}
+async function getRole(env, uid) {
+  const s = await getSessionInfo(env, uid);
+  return s ? s.role : null;
 }
 const isAdmin = async (env, uid) => !!(await getRole(env, uid));
 
@@ -372,17 +485,69 @@ function pager(page, pages, prefix) {
 const clampPage = (page, total) => Math.min(Math.max(0, page | 0), Math.max(0, Math.ceil(total / PAGE_SIZE) - 1));
 
 async function viewHome(env, chatId, msgId) {
-  const { results } = await env.DB.prepare(
-    'SELECT c.id,c.name,COUNT(n.id) AS cnt FROM categories c LEFT JOIN notes n ON n.category_id=c.id GROUP BY c.id ORDER BY c.id'
-  ).all();
-  const total = results.reduce((s, r) => s + r.cnt, 0);
-  const rows = [];
-  for (let i = 0; i < results.length; i += 2) {
-    rows.push(results.slice(i, i + 2).map((c) => btn(`${icon(c.name)} ${c.name} (${fa(c.cnt)})`, `u:c:${c.id}:0`)));
+  const s = await getSettings(env);
+  const t = now();
+  const [{ results }, totals, u] = await Promise.all([
+    env.DB.prepare('SELECT c.id,c.name,c.emoji,COUNT(n.id) AS cnt FROM categories c LEFT JOIN notes n ON n.category_id=c.id GROUP BY c.id ORDER BY c.id').all(),
+    env.DB.prepare('SELECT COUNT(*) AS notes_cnt, COALESCE(SUM(downloads),0) AS dl_cnt FROM notes').first(),
+    env.DB.prepare('SELECT first_name FROM users WHERE user_id=?').bind(String(chatId)).first(),
+  ]);
+  const name = esc((u && u.first_name) || 'دوست من');
+  const greet = (s.ui_greeting || DEFAULT_SETTINGS.ui_greeting).replace('{name}', name);
+
+  const lines = [`<b>${esc(s.ui_title || DEFAULT_SETTINGS.ui_title)}</b>`, `${greet} — ${timeGreeting(t)}`, ''];
+
+  if (s.sec_next_exam !== '0') {
+    const ex = await env.DB.prepare("SELECT title,exam_at FROM exams WHERE status='published' AND exam_at>? ORDER BY exam_at ASC LIMIT 1").bind(t).first();
+    if (ex) {
+      const days = Math.ceil((ex.exam_at - t) / 86400);
+      lines.push(`📌 امتحان بعدی: <b>${esc(ex.title)}</b> — ${days <= 0 ? 'امروز' : `${fa(days)} روز دیگر`}`);
+    }
   }
-  rows.push([btn('🔍 جستجو', 'u:s')]);
-  const text = `📚 <b>کتابخانه جزوه</b>\n\nدسته‌بندی مورد نظر را انتخاب کنید یا جزوه‌ها را جستجو کنید.\n\n📄 مجموع جزوه‌ها: ${fa(total)}`;
-  return show(env, chatId, msgId, text, kb(rows));
+  if (s.sec_stats !== '0') lines.push(`📊 ${fa(totals.notes_cnt)} جزوه در ${fa(results.length)} دسته • 📥 ${fa(totals.dl_cnt)} دانلود`);
+  lines.push(DIVIDER, 'دسته‌بندی مورد نظر را انتخاب کنید:');
+
+  const rows = [];
+  const catColor = s.ui_color_cat;
+  for (let i = 0; i < results.length; i += 2) {
+    rows.push(results.slice(i, i + 2).map((c) => sbtn(`${catIcon(c)} ${c.name} (${fa(c.cnt)})`, `u:c:${c.id}:0`, catColor)));
+  }
+  const actColor = s.ui_color_action;
+  const row1 = [];
+  if (s.sec_search !== '0') row1.push(sbtn('🔍 جستجو', 'u:s', actColor));
+  if (s.sec_random !== '0') row1.push(sbtn('🎲 شانسی', 'u:random', actColor));
+  if (row1.length) rows.push(row1);
+  const row2 = [];
+  if (s.sec_latest !== '0') row2.push(sbtn('🆕 جدیدترین‌ها', 'u:latest:0', actColor));
+  if (s.sec_hot !== '0') row2.push(sbtn('🔥 پرطرفدارها', 'u:hot:0', actColor));
+  if (row2.length) rows.push(row2);
+
+  return show(env, chatId, msgId, lines.join('\n'), kb(rows));
+}
+
+async function viewNoteList(env, chatId, msgId, page, { title, order, prefix, empty }) {
+  const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes').first()).c;
+  if (!total) return show(env, chatId, msgId, empty, kb([[btn('🏠 خانه', 'u:home')]]));
+  page = clampPage(page, total);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const { results } = await env.DB.prepare(`SELECT id,title,created_at,downloads,file_type FROM notes ORDER BY ${order} LIMIT ? OFFSET ?`)
+    .bind(PAGE_SIZE, page * PAGE_SIZE).all();
+  const settings = await getSettings(env);
+  const rows = results.map((n) => [btn(badgePrefix(n, settings) + (FILE_ICON[n.file_type] || '📄') + ' ' + trunc(n.title, 50), `u:n:${n.id}:${prefix}_${page}`)]);
+  rows.push(...pager(page, pages, `u:${prefix === 'l' ? 'latest' : 'hot'}:`));
+  rows.push([btn('🏠 خانه', 'u:home')]);
+  return show(env, chatId, msgId, `${title}\n📄 ${fa(total)} جزوه`, kb(rows));
+}
+const viewLatest = (env, chatId, msgId, page) => viewNoteList(env, chatId, msgId, page, {
+  title: '🆕 <b>جدیدترین جزوه‌ها</b>', order: 'id DESC', prefix: 'l', empty: 'هنوز جزوه‌ای اضافه نشده 🙂',
+});
+const viewHot = (env, chatId, msgId, page) => viewNoteList(env, chatId, msgId, page, {
+  title: '🔥 <b>پرطرفدارترین جزوه‌ها</b>', order: 'downloads DESC, id DESC', prefix: 'h', empty: 'هنوز دانلودی ثبت نشده 🙂',
+});
+async function viewRandom(env, chatId, msgId) {
+  const r = await env.DB.prepare('SELECT id FROM notes ORDER BY RANDOM() LIMIT 1').first();
+  if (!r) return show(env, chatId, msgId, 'هنوز جزوه‌ای برای پیشنهاد نداریم 🙁', kb([[btn('🏠 خانه', 'u:home')]]));
+  return viewNote(env, chatId, msgId, r.id, null);
 }
 
 function badgePrefix(n, settings) {
@@ -397,23 +562,26 @@ async function viewCategory(env, chatId, msgId, catId, page) {
   const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes WHERE category_id=?').bind(catId).first()).c;
   page = clampPage(page, total);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const { results } = await env.DB.prepare('SELECT id,title,created_at,downloads FROM notes WHERE category_id=? ORDER BY id DESC LIMIT ? OFFSET ?')
+  const { results } = await env.DB.prepare('SELECT id,title,created_at,downloads,file_type FROM notes WHERE category_id=? ORDER BY id DESC LIMIT ? OFFSET ?')
     .bind(catId, PAGE_SIZE, page * PAGE_SIZE).all();
   const settings = await getSettings(env);
-  const rows = results.map((n) => [btn(badgePrefix(n, settings) + '📄 ' + trunc(n.title, 50), `u:n:${n.id}:c${catId}_${page}`)]);
+  const rows = results.map((n) => [btn(badgePrefix(n, settings) + (FILE_ICON[n.file_type] || '📄') + ' ' + trunc(n.title, 50), `u:n:${n.id}:c${catId}_${page}`)]);
   rows.push(...pager(page, pages, `u:c:${catId}:`));
   rows.push([btn('🏠 خانه', 'u:home')]);
-  const text = `${icon(cat.name)} <b>${esc(cat.name)}</b>\n\n` + (total ? `📄 تعداد جزوه‌ها: ${fa(total)}` : 'هنوز جزوه‌ای در این دسته ثبت نشده است.');
+  const text = `${catIcon(cat)} <b>${esc(cat.name)}</b>\n\n` + (total ? `📄 تعداد جزوه‌ها: ${fa(total)}` : 'این دسته هنوز جزوه‌ای نداره 🙂');
   return show(env, chatId, msgId, text, kb(rows));
 }
 
 async function viewNote(env, chatId, msgId, id, ctx) {
   const n = await getNote(env, id);
-  if (!n) return show(env, chatId, msgId, '⚠️ این جزوه پیدا نشد.', kb([[btn('🏠 خانه', 'u:home')]]));
+  if (!n) return show(env, chatId, msgId, '⚠️ این جزوه دیگه نیست یا پاک شده 🙁', kb([[btn('🏠 خانه', 'u:home')]]));
+  const s = await getSettings(env);
   const [k, p] = String(ctx || '').split('_');
-  const back = k && k.startsWith('c') ? `u:c:${k.slice(1)}:${p || 0}` : k === 's' ? `u:sr:${p || 0}` : 'u:home';
+  const back = k && k.startsWith('c') ? `u:c:${k.slice(1)}:${p || 0}`
+    : k === 's' ? `u:sr:${p || 0}` : k === 'l' ? `u:latest:${p || 0}` : k === 'h' ? `u:hot:${p || 0}` : 'u:home';
+  const isNew = s.new_badge_enabled !== '0' && now() - n.created_at <= (parseInt(s.new_badge_hours, 10) || 24) * 3600;
   const text =
-    `📄 <b>${esc(n.title)}</b>\n\n` +
+    `${FILE_ICON[n.file_type] || '📄'} <b>${esc(n.title)}</b>${isNew ? ' 🆕' : ''}\n\n` +
     `📂 دسته‌بندی: ${esc(n.cat_name || '—')}\n` +
     `🏷 هشتگ‌ها: ${esc(n.hashtags || '—')}\n` +
     `📎 نوع: ${TYPE_LABEL[n.file_type] || 'فایل'}\n` +
@@ -423,7 +591,12 @@ async function viewNote(env, chatId, msgId, id, ctx) {
   const { results: related } = await env.DB.prepare(
     'SELECT id,title FROM notes WHERE category_id=? AND id<>? ORDER BY downloads DESC LIMIT 2'
   ).bind(n.category_id, n.id).all();
-  const rows = [[btn('📥 دریافت جزوه', `u:g:${n.id}`)]];
+  const rows = [[sbtn('📥 دریافت جزوه', `u:g:${n.id}`, s.ui_color_action)]];
+  if (s.sec_share !== '0') {
+    const username = await getBotUsername(env);
+    const shareText = trunc(`${n.title} 👉 ${username ? `https://t.me/${username}?start=note_${n.id}` : ''}`, 250);
+    rows.push([{ text: '📤 اشتراک‌گذاری', switch_inline_query: shareText, style: s.ui_color_share }]);
+  }
   for (const r of related) rows.push([btn('🔗 ' + trunc(r.title, 45), `u:n:${r.id}:c${n.category_id}_0`)]);
   rows.push([btn('🔙 بازگشت', back), btn('🏠 خانه', 'u:home')]);
   return show(env, chatId, msgId, text, kb(rows));
@@ -433,7 +606,7 @@ async function runSearch(env, chatId, msgId, uid, q, page) {
   const words = norm(q).split(/\s+/).map((w) => w.replace(/^#+/, '')).filter(Boolean).slice(0, 5);
   const query = words.join(' ');
   const emptyKb = kb([[btn('🔍 جستجوی جدید', 'u:s'), btn('🏠 خانه', 'u:home')]]);
-  if (!query) return show(env, chatId, msgId, '⚠️ عبارت جستجو معتبر نیست.', emptyKb);
+  if (!query) return show(env, chatId, msgId, '⚠️ یه عبارت برای جستجو بفرست.', emptyKb);
   await setState(env, uid, 'search_res', { q: query });
   const conds = [], binds = [];
   for (const w of words) {
@@ -443,13 +616,13 @@ async function runSearch(env, chatId, msgId, uid, q, page) {
   }
   const from = `FROM notes n LEFT JOIN categories c ON c.id=n.category_id WHERE ${conds.join(' AND ')}`;
   const total = (await env.DB.prepare(`SELECT COUNT(*) AS c ${from}`).bind(...binds).first()).c;
-  if (!total) return show(env, chatId, msgId, `🔍 نتیجه‌ای برای «${esc(query)}» پیدا نشد.\n\nنام فایل، هشتگ یا دسته‌بندی را امتحان کنید.`, emptyKb);
+  if (!total) return show(env, chatId, msgId, `🔍 چیزی برای «${esc(query)}» پیدا نکردم 😅\nیه کلمه‌ی دیگه امتحان کن.`, emptyKb);
   page = clampPage(page, total);
   const pages = Math.ceil(total / PAGE_SIZE);
-  const { results } = await env.DB.prepare(`SELECT n.id,n.title,n.created_at,n.downloads ${from} ORDER BY n.id DESC LIMIT ? OFFSET ?`)
+  const { results } = await env.DB.prepare(`SELECT n.id,n.title,n.created_at,n.downloads,n.file_type ${from} ORDER BY n.id DESC LIMIT ? OFFSET ?`)
     .bind(...binds, PAGE_SIZE, page * PAGE_SIZE).all();
   const settings = await getSettings(env);
-  const rows = results.map((n) => [btn(badgePrefix(n, settings) + '📄 ' + trunc(n.title, 50), `u:n:${n.id}:s_${page}`)]);
+  const rows = results.map((n) => [btn(badgePrefix(n, settings) + (FILE_ICON[n.file_type] || '📄') + ' ' + trunc(n.title, 50), `u:n:${n.id}:s_${page}`)]);
   rows.push(...pager(page, pages, 'u:sr:'));
   rows.push([btn('🔍 جستجوی جدید', 'u:s'), btn('🏠 خانه', 'u:home')]);
   return show(env, chatId, msgId, `🔍 نتایج «${esc(query)}»\n📄 ${fa(total)} مورد پیدا شد`, kb(rows));
@@ -457,7 +630,7 @@ async function runSearch(env, chatId, msgId, uid, q, page) {
 
 async function userGet(env, chatId, uid, id, ack) {
   const n = await getNote(env, id);
-  if (!n) return ack('⚠️ این جزوه دیگر موجود نیست.', true);
+  if (!n) return ack('⚠️ این جزوه دیگه موجود نیست 🙁', true);
   const r = await sendFile(env, chatId, n, n.cat_name);
   if (!r.ok) return ack('⚠️ ارسال فایل ناموفق بود. بعداً دوباره تلاش کنید.', true);
   await Promise.all([
@@ -471,14 +644,18 @@ async function userGet(env, chatId, uid, id, ack) {
 const cancelKb = kb([[btn('❌ انصراف', 'a:cancel')]]);
 
 async function viewPanel(env, chatId, msgId) {
-  const role = await getRole(env, String(chatId));
-  const rows = [
-    [sbtn('➕ افزودن جزوه', 'a:add', 'success')],
-    [btn('📚 مدیریت جزوه‌ها', 'a:nl:0')],
-    [btn('📂 مدیریت دسته‌بندی‌ها', 'a:cl')],
-    [btn('🗓 امتحانات و آزمون‌ها', 'a:ex')],
-    [btn('📊 آمار', 'a:st')],
-  ];
+  const sessInfo = await getSessionInfo(env, String(chatId));
+  const role = sessInfo ? sessInfo.role : null;
+  const perms = sessInfo ? sessInfo.perms : null;
+  const ac = await getSetting(env, 'ui_color_admin');
+  const rows = [];
+  if (hasPerm(perms, 'notes')) {
+    rows.push([sbtn('➕ افزودن جزوه', 'a:add', 'success')]);
+    rows.push([sbtn('📚 مدیریت جزوه‌ها', 'a:nl:0', ac), sbtn('🔎 جستجو', 'a:nq', ac)]);
+  }
+  if (hasPerm(perms, 'cats')) rows.push([sbtn('📂 مدیریت دسته‌بندی‌ها', 'a:cl', ac)]);
+  if (hasPerm(perms, 'exams')) rows.push([sbtn('🗓 امتحانات و آزمون‌ها', 'a:ex', ac)]);
+  if (hasPerm(perms, 'stats')) rows.push([sbtn('📊 آمار', 'a:st', ac)]);
   if (role === 'owner') {
     rows.push([btn('👥 مدیریت ادمین‌ها', 'a:am')]);
     rows.push([btn('📣 پیام همگانی', 'a:bc'), btn('📢 پست کانال سفارشی', 'a:cp')]);
@@ -495,15 +672,44 @@ async function catButtons(env, prefix) {
   return { rows, count: results.length };
 }
 
-async function adminNotes(env, chatId, msgId, page) {
-  const total = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes').first()).c;
+async function adminNotes(env, chatId, msgId, uid, page, opts = {}) {
+  let where = '1=1', binds = [];
+  if (opts.catId) { where = 'category_id=?'; binds = [opts.catId]; }
+  else if (opts.q) {
+    const like = '%' + opts.q.replace(/[\\%_]/g, '\\$&') + '%';
+    where = `(title LIKE ? ESCAPE '\\' OR hashtags LIKE ? ESCAPE '\\')`;
+    binds = [like, like];
+  }
+  const total = (await env.DB.prepare(`SELECT COUNT(*) AS c FROM notes WHERE ${where}`).bind(...binds).first()).c;
   page = clampPage(page, total);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const { results } = await env.DB.prepare('SELECT id,title FROM notes ORDER BY id DESC LIMIT ? OFFSET ?').bind(PAGE_SIZE, page * PAGE_SIZE).all();
-  const rows = results.map((n) => [btn('📄 ' + trunc(n.title, 50), `a:n:${n.id}:${page}`)]);
-  rows.push(...pager(page, pages, 'a:nl:'));
-  rows.push([btn('🔙 پنل مدیریت', 'a:panel')]);
-  return show(env, chatId, msgId, `📚 <b>مدیریت جزوه‌ها</b>\n\n` + (total ? `📄 تعداد کل: ${fa(total)}` : 'هنوز جزوه‌ای ثبت نشده است.'), kb(rows));
+  const { results } = await env.DB.prepare(`SELECT id,title FROM notes WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`)
+    .bind(...binds, PAGE_SIZE, page * PAGE_SIZE).all();
+  const pagePrefix = opts.catId ? `a:nlc:${opts.catId}:` : opts.q ? `a:nlq:` : `a:nl:`;
+  const filtered = !!(opts.catId || opts.q);
+  const st = filtered ? null : await getState(env, uid);
+  const bulk = st && st.name === 'bulk_select' ? st.data : null;
+
+  const rows = results.map((n) => bulk
+    ? [btn(`${bulk.ids.includes(n.id) ? '✅' : '⬜'} ${trunc(n.title, 45)}`, `a:bsel:${n.id}:${page}`)]
+    : [btn('📄 ' + trunc(n.title, 50), `a:n:${n.id}:${page}`)]);
+  rows.push(...pager(page, pages, pagePrefix));
+
+  if (bulk) {
+    rows.push([btn(`🗑 حذف انتخاب‌شده‌ها (${fa(bulk.ids.length)})`, 'a:bdel'), btn('📂 انتقال دسته', 'a:bmove')]);
+    rows.push([btn('❌ لغو انتخاب', 'a:bcancel')]);
+  } else {
+    if (!filtered) {
+      rows.push([btn('☑️ انتخاب چندتایی', 'a:bstart:' + page)]);
+      rows.push([btn('🔎 جستجو', 'a:nq'), btn('📂 فیلتر دسته', 'a:nqc')]);
+    } else {
+      rows.push([btn('🔙 حذف فیلتر', 'a:nl:0')]);
+    }
+    rows.push([btn('🔙 پنل مدیریت', 'a:panel')]);
+  }
+  const title = opts.catId ? '📚 <b>جزوه‌های این دسته</b>' : opts.q ? `🔎 <b>نتایج «${esc(opts.q)}»</b>` : '📚 <b>مدیریت جزوه‌ها</b>';
+  const text = `${title}\n\n` + (total ? `📄 تعداد: ${fa(total)}` : 'چیزی پیدا نشد 🙂');
+  return show(env, chatId, msgId, text, kb(rows));
 }
 
 async function adminNote(env, chatId, msgId, id, page = 0) {
@@ -542,17 +748,42 @@ async function adminNoteDownloaders(env, chatId, msgId, noteId, page) {
 
 async function adminCats(env, chatId, msgId) {
   const { results } = await env.DB.prepare(
-    'SELECT c.id,c.name,COUNT(n.id) AS cnt FROM categories c LEFT JOIN notes n ON n.category_id=c.id GROUP BY c.id ORDER BY c.id'
+    'SELECT c.id,c.name,c.emoji,COUNT(n.id) AS cnt FROM categories c LEFT JOIN notes n ON n.category_id=c.id GROUP BY c.id ORDER BY c.id'
   ).all();
-  const rows = results.map((c) => [btn(`${icon(c.name)} ${c.name} (${fa(c.cnt)})`, `a:c:${c.id}`)]);
+  const rows = results.map((c) => [btn(`${catIcon(c)} ${c.name} (${fa(c.cnt)})`, `a:c:${c.id}`)]);
   rows.push([btn('➕ افزودن دسته‌بندی', 'a:ca')]);
   rows.push([btn('🔙 پنل مدیریت', 'a:panel')]);
   return show(env, chatId, msgId, '📂 <b>مدیریت دسته‌بندی‌ها</b>', kb(rows));
 }
+async function adminCatDetail(env, chatId, msgId, id) {
+  const cat = await getCat(env, id);
+  if (!cat) return adminCats(env, chatId, msgId);
+  const cnt = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes WHERE category_id=?').bind(id).first()).c;
+  return show(env, chatId, msgId, `${catIcon(cat)} <b>${esc(cat.name)}</b>\n\n📄 تعداد جزوه‌ها: ${fa(cnt)}`,
+    kb([[btn('✏️ تغییر نام', `a:cr:${id}`), btn('🎨 تغییر ایموجی', `a:ce:${id}`)], [btn('🗑 حذف', `a:cd:${id}`)], [btn('🔙 بازگشت', 'a:cl')]]));
+}
 
+function barChart(value, max, width = 10) {
+  const filled = max > 0 ? Math.round((value / max) * width) : 0;
+  return '█'.repeat(Math.min(width, Math.max(0, filled))) + '░'.repeat(Math.max(0, width - Math.min(width, Math.max(0, filled))));
+}
+async function weeklyDownloadTrend(env, t0) {
+  const OFF = TEHRAN_OFFSET_MIN * 60;
+  const todayIdx = Math.floor((t0 + OFF) / 86400);
+  const counts = [];
+  for (let i = 6; i >= 0; i--) {
+    const idx = todayIdx - i;
+    const start = idx * 86400 - OFF, end = start + 86400;
+    const r = await env.DB.prepare('SELECT COUNT(*) AS c FROM downloads WHERE ts>=? AND ts<?').bind(start, end).first();
+    let label = '—';
+    try { label = new Intl.DateTimeFormat('fa-IR', { weekday: 'short', timeZone: 'Asia/Tehran' }).format(new Date(start * 1000 + 3600000)); } catch {}
+    counts.push({ label, c: r.c });
+  }
+  return counts;
+}
 async function adminStats(env, chatId, msgId) {
   const t0 = now(), day = 86400;
-  const [t, cats, u, topNotes] = await Promise.all([
+  const [t, cats, u, topNotes, week] = await Promise.all([
     env.DB.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(downloads),0) AS d, COALESCE(SUM(file_size),0) AS s FROM notes').first(),
     env.DB.prepare('SELECT c.name,COUNT(n.id) AS cnt FROM categories c LEFT JOIN notes n ON n.category_id=c.id GROUP BY c.id ORDER BY c.id').all(),
     env.DB.prepare(
@@ -563,8 +794,12 @@ async function adminStats(env, chatId, msgId) {
        FROM users`
     ).bind(t0 - day, t0 - 7 * day, t0 - 7 * day).first(),
     env.DB.prepare('SELECT id,title,downloads FROM notes WHERE downloads>0 ORDER BY downloads DESC LIMIT 5').all(),
+    weeklyDownloadTrend(env, t0),
   ]);
-  const lines = cats.results.map((c) => `${icon(c.name)} ${esc(c.name)}: ${fa(c.cnt)}`).join('\n');
+  const maxCat = Math.max(...cats.results.map((c) => c.cnt), 1);
+  const lines = cats.results.map((c) => `${icon(c.name)} ${esc(trunc(c.name, 10)).padEnd(10, ' ')} ${barChart(c.cnt, maxCat, 8)} ${fa(c.cnt)}`).join('\n');
+  const maxW = Math.max(...week.map((w) => w.c), 1);
+  const weekLines = week.map((w) => `${w.label} ${barChart(w.c, maxW, 8)} ${fa(w.c)}`).join('\n');
   const topLines = topNotes.results.length
     ? topNotes.results.map((n, i) => `${fa(i + 1)}. ${esc(trunc(n.title, 40))} — ${fa(n.downloads)} دریافت`).join('\n')
     : '—';
@@ -574,8 +809,9 @@ async function adminStats(env, chatId, msgId) {
     `📥 مجموع دریافت‌ها: ${fa(t.d)}\n💾 حجم کل فایل‌ها: ${fmtSize(t.s)}\n\n` +
     `👥 <b>کاربران</b>\n👤 کل کاربران: ${fa(u.total || 0)}\n🆕 جدید (۲۴ساعت اخیر): ${fa(u.d1 || 0)}\n` +
     `📅 جدید (۷ روز اخیر): ${fa(u.d7 || 0)}\n🟢 فعال در ۷ روز اخیر: ${fa(u.active7 || 0)}\n\n` +
+    `📈 <b>روند دانلود ۷ روز اخیر</b>\n<code>${weekLines}</code>\n\n` +
     `🏆 <b>پربازدیدترین جزوه‌ها:</b>\n${topLines}\n\n` +
-    `<b>به تفکیک دسته:</b>\n${lines}`;
+    `<b>به تفکیک دسته</b>\n<code>${lines}</code>`;
   return show(env, chatId, msgId, text, kb([[btn('👥 لیست کاربران', 'a:ux:0')], [btn('🔙 پنل مدیریت', 'a:panel')]]));
 }
 
@@ -663,7 +899,7 @@ async function setBoardMsgId(env, msgId) {
   ).bind(JSON.stringify({ message_id: msgId }), t, JSON.stringify({ message_id: msgId }), t).run();
 }
 function examLine(e, t) {
-  const dateStr = fmtJalali(e.exam_at);
+  const dateStr = fmtExamDate(e.exam_at);
   if (e.status === 'held') {
     return `✅ <s>${esc(e.title)}</s>\n🗓 ${dateStr} — برگزار شد` + (e.note ? `\n📝 ${esc(e.note)}` : '');
   }
@@ -687,17 +923,13 @@ async function renderBoard(env) {
   if ((await getSetting(env, 'board_countdown_enabled')) !== '0') {
     const nearest = results.find((e) => e.status !== 'held');
     if (nearest) {
-      const diff = nearest.exam_at - t;
-      if (diff > 0) {
-        const days = Math.floor(diff / 86400), hours = Math.floor((diff % 86400) / 3600), mins = Math.floor((diff % 3600) / 60);
-        const human = days > 0 ? `${fa(days)} روز و ${fa(hours)} ساعت` : hours > 0 ? `${fa(hours)} ساعت و ${fa(mins)} دقیقه` : `${fa(mins)} دقیقه`;
-        countdownLine = `⏱ <b>نزدیک‌ترین امتحان:</b> ${esc(nearest.title)} — ${human} دیگر\n\n`;
-      } else {
-        countdownLine = `🔥 <b>همین الان:</b> ${esc(nearest.title)}\n\n`;
-      }
+      const days = tehranDayIndex(nearest.exam_at) - tehranDayIndex(t);
+      if (days <= 0) countdownLine = `🔥 <b>همین امروز:</b> ${esc(nearest.title)}\n\n`;
+      else if (days === 1) countdownLine = `⏰ <b>فردا:</b> ${esc(nearest.title)}\n\n`;
+      else countdownLine = `⏱ <b>نزدیک‌ترین امتحان:</b> ${esc(nearest.title)} — ${fa(days)} روز دیگر\n\n`;
     }
   }
-  const header = `🗓 <b>تابلوی امتحانات و آزمون‌ها</b>\n<i>آخرین به‌روزرسانی: ${fmtJalali(t)}</i>\n\n` + countdownLine;
+  const header = `🗓 <b>تابلوی امتحانات و آزمون‌ها</b>\n<i>آخرین به‌روزرسانی: ${fmtExamDate(t)}</i>\n\n` + countdownLine;
   let body;
   if (!results.length) {
     body = '🎉 فعلاً امتحان یا آزمونی در پیش نیست.';
@@ -791,7 +1023,7 @@ async function proceedWithDate(env, chatId, msgId, uid, st, ts) {
       return finalizeExam(env, chatId, uid, d, ts);
     case 'exam_edit_date': {
       const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
-      await env.DB.prepare('UPDATE exams SET exam_at=?,confirm_pending=0,updated_at=? WHERE id=?').bind(ts, now(), d.id).run();
+      await env.DB.prepare('UPDATE exams SET exam_at=?,confirm_pending=0,reminder_sent=0,updated_at=? WHERE id=?').bind(ts, now(), d.id).run();
       await clearState(env, uid);
       if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
       return examDetail(env, chatId, msgId, d.id);
@@ -804,7 +1036,7 @@ async function proceedWithDate(env, chatId, msgId, uid, st, ts) {
       return examDetail(env, chatId, msgId, d.id);
     }
     case 'exam_reschedule': {
-      await env.DB.prepare("UPDATE exams SET exam_at=?,confirm_pending=0,status='published',updated_at=? WHERE id=?").bind(ts, now(), d.id).run();
+      await env.DB.prepare("UPDATE exams SET exam_at=?,confirm_pending=0,status='published',reminder_sent=0,updated_at=? WHERE id=?").bind(ts, now(), d.id).run();
       await clearState(env, uid);
       await renderBoard(env);
       return examDetail(env, chatId, msgId, d.id);
@@ -820,12 +1052,12 @@ async function finalizeExam(env, chatId, uid, d, publishAt) {
   ).bind(d.title, d.note || '', d.exam_at, publishAt, status, t, t).run();
   await clearState(env, uid);
   if (status === 'published') await renderBoard(env);
-  await logActivity(env, uid, 'افزودن امتحان', `${d.title} — ${fmtJalali(d.exam_at)}`);
+  await logActivity(env, uid, 'افزودن امتحان', `${d.title} — ${fmtExamDate(d.exam_at)}`);
   const when = status === 'published'
     ? 'از همین الان توی تابلوی کانال نمایش داده می‌شود.'
-    : `از تاریخ ${fmtJalali(publishAt)} توی تابلوی کانال نمایش داده می‌شود.`;
+    : `از تاریخ ${fmtExamDate(publishAt)} توی تابلوی کانال نمایش داده می‌شود.`;
   return sendText(env, chatId,
-    `✅ <b>امتحان ثبت شد</b>\n\n📌 ${esc(d.title)}\n🗓 ${fmtJalali(d.exam_at)}` + (d.note ? `\n📝 ${esc(d.note)}` : '') + `\n\n📢 ${when}`,
+    `✅ <b>امتحان ثبت شد</b>\n\n📌 ${esc(d.title)}\n🗓 ${fmtExamDate(d.exam_at)}` + (d.note ? `\n📝 ${esc(d.note)}` : '') + `\n\n📢 ${when}`,
     kb([[btn('➕ افزودن امتحان دیگر', 'a:ea')], [btn('🗓 امتحانات و آزمون‌ها', 'a:ex')], [btn('🛠 پنل مدیریت', 'a:panel')]]));
 }
 
@@ -854,7 +1086,7 @@ async function examList(env, chatId, msgId, page) {
   ).bind(PAGE_SIZE, page * PAGE_SIZE).all();
   const rows = results.map((e) => {
     const ic = e.confirm_pending ? '⏳' : (EXAM_STATUS_ICON[e.status] || '📌');
-    return [btn(`${ic} ${trunc(e.title, 40)} — ${fmtJalali(e.exam_at)}`, `a:ed:${e.id}`)];
+    return [btn(`${ic} ${trunc(e.title, 40)} — ${fmtExamDate(e.exam_at)}`, `a:ed:${e.id}`)];
   });
   rows.push(...pager(page, pages, 'a:el:'));
   rows.push([btn('🔙 امتحانات و آزمون‌ها', 'a:ex')]);
@@ -866,8 +1098,8 @@ async function examDetail(env, chatId, msgId, id) {
   const e = await env.DB.prepare('SELECT * FROM exams WHERE id=?').bind(id).first();
   if (!e) return show(env, chatId, msgId, '⚠️ امتحان پیدا نشد.', kb([[btn('🔙 لیست', 'a:el:0')]]));
   const statusLabel = { scheduled: '🕓 در انتظار انتشار در کانال', published: '🟢 منتشرشده (در تابلوی کانال)', held: '✅ برگزار شده', cancelled: '🚫 لغوشده' }[e.status] || e.status;
-  let text = `📌 <b>${esc(e.title)}</b>\n\n🗓 تاریخ امتحان: ${fmtJalali(e.exam_at)}\n📢 وضعیت: ${statusLabel}`;
-  if (e.status === 'scheduled') text += `\n🚀 زمان شروع انتشار: ${fmtJalali(e.publish_at)}`;
+  let text = `📌 <b>${esc(e.title)}</b>\n\n🗓 تاریخ امتحان: ${fmtExamDate(e.exam_at)}\n📢 وضعیت: ${statusLabel}`;
+  if (e.status === 'scheduled') text += `\n🚀 زمان شروع انتشار: ${fmtExamDate(e.publish_at)}`;
   if (e.note) text += `\n📝 توضیح: ${esc(e.note)}`;
   if (e.confirm_pending) text += `\n\n⏳ <b>زمان این امتحان گذشته و نیاز به تایید نتیجه دارد:</b>`;
   const rows = [];
@@ -944,29 +1176,73 @@ async function admDetail(env, chatId, msgId, id, extra = '') {
   const a = await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(id).first();
   if (!a) return show(env, chatId, msgId, '⚠️ ادمین پیدا نشد.', kb([[btn('🔙 لیست', 'a:aml:0')]]));
   const online = (await env.DB.prepare('SELECT COUNT(*) AS c FROM admin_sessions WHERE admin_id=? AND expires_at>?').bind(id, now()).first()).c;
+  let perms = null; try { perms = a.permissions ? JSON.parse(a.permissions) : null; } catch { perms = null; }
+  const permLabel = perms ? MODULES.filter((m) => perms.includes(m.key)).map((m) => m.label).join('، ') || 'هیچ‌کدام' : 'کامل (همه بخش‌ها)';
+  const expLabel = a.expires_at ? fmtDateTime(a.expires_at) : 'همیشگی';
   const text = `👤 <b>${esc(a.name)}</b>\n\n📌 وضعیت: ${a.active ? '🟢 فعال' : '🔴 غیرفعال'}\n🗓 ساخته‌شده: ${fmtDate(a.created_at)}\n` +
-    `🕒 آخرین ورود: ${a.last_login ? fmtDateTime(a.last_login) : '—'}\n🔓 نشست فعال: ${online ? 'بله' : 'خیر'}` + extra;
+    `🕒 آخرین ورود: ${a.last_login ? fmtDateTime(a.last_login) : '—'}\n🔓 نشست فعال: ${online ? 'بله' : 'خیر'}\n` +
+    `🔐 دسترسی: ${esc(permLabel)}\n⏳ انقضا: ${esc(expLabel)}` + extra;
   return show(env, chatId, msgId, text, kb([
     [btn('✏️ تغییر نام', `a:amn:${id}`), btn('🔑 تغییر رمز', `a:amr:${id}`)],
     [btn('🎲 رمز تصادفی جدید', `a:amg:${id}`)],
+    [btn('🔐 دسترسی‌ها', `a:amp:${id}`), btn('⏳ انقضا', `a:ampexp:${id}`)],
     [btn(a.active ? '⏸ غیرفعال کردن' : '▶️ فعال کردن', `a:amt:${id}`), btn('🚪 خروج اجباری', `a:amo:${id}`)],
     [sbtn('🗑 حذف ادمین', `a:amx:${id}`, 'danger')],
     [btn('🔙 لیست', 'a:aml:0')],
   ]));
 }
+async function viewAdminPerms(env, chatId, msgId, id) {
+  const a = await env.DB.prepare('SELECT permissions FROM admins WHERE id=?').bind(id).first();
+  if (!a) return admList(env, chatId, msgId, 0);
+  let perms = null; try { perms = a.permissions ? JSON.parse(a.permissions) : null; } catch { perms = null; }
+  const rows = MODULES.map((m) => [btn(`${hasPerm(perms, m.key) ? '✅' : '❌'} ${m.label}`, `a:ampt:${id}:${m.key}`)]);
+  rows.push([btn('♾ دسترسی کامل', `a:ampall:${id}`)]);
+  rows.push([btn('🔙 بازگشت', `a:amd:${id}`)]);
+  return show(env, chatId, msgId, `🔐 <b>دسترسی‌های این ادمین</b>\n\nهر بخش رو لمس کن تا روشن/خاموش بشه:`, kb(rows));
+}
+async function viewAdminExpiry(env, chatId, msgId, id) {
+  return show(env, chatId, msgId, '⏳ <b>مدت دسترسی ادمین</b>\n\nیکی رو انتخاب کن:', kb([
+    [btn('♾ همیشگی', `a:ampexpv:${id}:never`)],
+    [btn('☀️ فقط امروز', `a:ampexpv:${id}:today`)],
+    [btn('🕐 ۲۴ ساعت از الان', `a:ampexpv:${id}:24h`)],
+    [btn('✏️ سفارشی (ساعت)', `a:ampexpc:${id}`)],
+    [btn('🔙 بازگشت', `a:amd:${id}`)],
+  ]));
+}
 
 /* ───────────── تنظیمات و شخصی‌سازی ───────────── */
 async function viewSettings(env, chatId, msgId) {
+  return show(env, chatId, msgId, '⚙️ <b>تنظیمات و شخصی‌سازی</b>\n\nکدوم بخش رو می‌خوای شخصی‌سازی کنی؟', kb([
+    [btn('🎨 ظاهر صفحه اصلی و دکمه‌ها', 'a:seui')],
+    [btn('🛠 قابلیت‌های سیستمی', 'a:sesys')],
+    [sbtn('🔄 بازگشت به پیش‌فرض', 'a:sereset', 'danger')],
+    [btn('🔙 پنل مدیریت', 'a:panel')],
+  ]));
+}
+function colorLabel(v) { return (COLOR_OPTIONS.find((c) => c.v === v) || COLOR_OPTIONS[3]).label; }
+async function viewSettingsGroup(env, chatId, msgId, group) {
   const s = await getSettings(env);
-  const rows = SETTINGS_DEF.map((def) => {
+  const defs = SETTINGS_DEF.filter((d) => d.group === group);
+  const rows = defs.map((def) => {
     if (def.type === 'bool') {
       const on = s[def.key] !== '0';
       return [btn(`${on ? '✅' : '❌'} ${def.label}`, `a:setg:${def.key}`)];
     }
+    if (def.type === 'color') return [btn(`🎨 ${def.label}: ${colorLabel(s[def.key])}`, `a:setc:${def.key}`)];
+    if (def.type === 'text') return [btn(`✏️ ${def.label}`, `a:sett:${def.key}`)];
     return [btn(`✏️ ${def.label}: ${fa(s[def.key])}`, `a:setn:${def.key}`)];
   });
-  rows.push([btn('🔙 پنل مدیریت', 'a:panel')]);
-  return show(env, chatId, msgId, '⚙️ <b>تنظیمات و شخصی‌سازی</b>\n\nهر مورد رو لمس کن تا روشن/خاموش یا تغییرش بدی:', kb(rows));
+  rows.push([btn('🔙 بازگشت', 'a:se')]);
+  const title = group === 'ui' ? '🎨 <b>ظاهر و شخصی‌سازی خانه</b>' : '🛠 <b>قابلیت‌های سیستمی</b>';
+  return show(env, chatId, msgId, `${title}\n\nهر مورد رو لمس کن تا تغییرش بدی:`, kb(rows));
+}
+async function viewColorPicker(env, chatId, msgId, key) {
+  const def = SETTINGS_DEF.find((d) => d.key === key);
+  if (!def) return viewSettings(env, chatId, msgId);
+  const cur = await getSetting(env, key);
+  const rows = COLOR_OPTIONS.map((c) => [sbtn(`${c.v === cur ? '✓ ' : ''}${c.label} (پیش‌نمایش)`, `a:setcv:${key}:${c.v || 'none'}`, c.v)]);
+  rows.push([btn('🔙 بازگشت', 'a:seui')]);
+  return show(env, chatId, msgId, `🎨 <b>${esc(def.label)}</b>\n\nهر رنگ رو با همون استایل واقعی می‌بینی؛ روش بزن تا انتخاب بشه:`, kb(rows));
 }
 
 /* ───────────── گزارش فعالیت ادمین‌ها ───────────── */
@@ -1280,6 +1556,20 @@ async function onAdminState(env, m, uid, st, text) {
       await clearState(env, uid);
       return adminCats(env, chatId, null);
     }
+    case 'admin_note_search': {
+      const q = trunc(norm(text), 60);
+      if (!q) return sendText(env, chatId, '⚠️ یک عبارت بفرستید.', cancelKb);
+      await setState(env, uid, 'admin_search_res', { q });
+      return adminNotes(env, chatId, null, uid, 0, { q });
+    }
+    case 'cat_emoji': {
+      const em = text.trim().slice(0, 8);
+      if (!em) return sendText(env, chatId, '⚠️ یک ایموجی بفرستید.', cancelKb);
+      await env.DB.prepare('UPDATE categories SET emoji=? WHERE id=?').bind(em, d.id).run();
+      await clearState(env, uid);
+      await logActivity(env, uid, 'تغییر ایموجی دسته', `#${d.id} → ${em}`);
+      return adminCatDetail(env, chatId, null, d.id);
+    }
     case 'cat_ren': {
       const name = trunc(norm(text), 40);
       if (!name) return sendText(env, chatId, '⚠️ نام معتبر ارسال کنید.', cancelKb);
@@ -1304,6 +1594,15 @@ async function onAdminState(env, m, uid, st, text) {
       await clearState(env, uid);
       await logActivity(env, uid, 'افزودن ادمین', `${d.name} (#${id})`);
       return admDetail(env, chatId, null, id, '\n\n✅ ادمین ساخته شد. رمز را به خودش بدهید؛ برای امنیت، رمز دوباره نمایش داده نمی‌شود.');
+    }
+    case 'adm_expiry_custom': {
+      const h = parseInt(digits(text).replace(/[^\d]/g, ''), 10);
+      if (!Number.isFinite(h) || h < 1 || h > 8760) return sendText(env, chatId, '⚠️ عددی بین ۱ تا ۸۷۶۰ ساعت بفرستید.', cancelKb);
+      const exp = now() + h * 3600;
+      await env.DB.prepare('UPDATE admins SET expires_at=? WHERE id=?').bind(exp, d.id).run();
+      await clearState(env, uid);
+      await logActivity(env, uid, 'تغییر انقضای دسترسی', `#${d.id} → ${fmtDateTime(exp)}`);
+      return admDetail(env, chatId, null, d.id);
     }
     case 'adm_rename': {
       const name = trunc(norm(text), 40);
@@ -1372,6 +1671,13 @@ async function onAdminState(env, m, uid, st, text) {
       await clearState(env, uid);
       await logActivity(env, uid, 'تغییر تنظیمات', `${d.label} → ${fa(v)}`);
       return viewSettings(env, chatId, null);
+    }
+    case 'set_text': {
+      if (!text || text.length > d.max) return sendText(env, chatId, `⚠️ متن معتبر نیست (حداکثر ${fa(d.max)} کاراکتر).`, cancelKb);
+      await setSetting(env, d.key, text);
+      await clearState(env, uid);
+      await logActivity(env, uid, 'تغییر تنظیمات', `${d.label} → ${trunc(text, 60)}`);
+      return viewSettingsGroup(env, chatId, null, 'ui');
     }
     case 'broadcast_text': {
       if (!text) return sendText(env, chatId, '⚠️ متن پیام را بفرستید.', cancelKb);
@@ -1445,14 +1751,20 @@ async function userRoute(env, p, num, chatId, msgId, uid, ack) {
       if (!st || !st.data.q) return show(env, chatId, msgId, '🔍 عبارت جستجو را دوباره بنویسید:', kb([[btn('🏠 خانه', 'u:home')]]));
       return runSearch(env, chatId, msgId, uid, st.data.q, num(2));
     }
+    case 'latest': await ack(); return viewLatest(env, chatId, msgId, num(2));
+    case 'hot': await ack(); return viewHot(env, chatId, msgId, num(2));
+    case 'random': await ack(); return viewRandom(env, chatId, msgId);
   }
 }
 
 async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
   const id = num(2);
-  const role = await getRole(env, uid);
+  const sessInfo = await getSessionInfo(env, uid);
+  const role = sessInfo ? sessInfo.role : null;
   const ownerOnlyPrefix = ['am', 'se', 'bc', 'cp', 'al'].some((pre) => p[1].startsWith(pre));
   if (ownerOnlyPrefix && role !== 'owner') return ack('⛔ فقط مدیر اصلی به این بخش دسترسی دارد.', true);
+  const mod = prefixModule(p[1]);
+  if (mod && role === 'admin' && !hasPerm(sessInfo.perms, mod)) return ack('⛔ شما به این بخش دسترسی ندارید.', true);
   const prompt = async (state, data, text) => {
     await ack();
     await setState(env, uid, state, data);
@@ -1475,6 +1787,8 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
 
     /* تنظیمات و شخصی‌سازی */
     case 'se': await ack(); await clearState(env, uid); return viewSettings(env, chatId, msgId);
+    case 'seui': await ack(); return viewSettingsGroup(env, chatId, msgId, 'ui');
+    case 'sesys': await ack(); return viewSettingsGroup(env, chatId, msgId, 'sys');
     case 'setg': {
       const def = SETTINGS_DEF.find((x) => x.key === p[2]);
       if (!def) return ack();
@@ -1482,7 +1796,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       await setSetting(env, def.key, cur ? '0' : '1');
       await logActivity(env, uid, 'تغییر تنظیمات', `${def.label} → ${cur ? 'غیرفعال' : 'فعال'}`);
       await ack('✅ تغییر کرد');
-      return viewSettings(env, chatId, msgId);
+      return viewSettingsGroup(env, chatId, msgId, def.group);
     }
     case 'setn': {
       const def = SETTINGS_DEF.find((x) => x.key === p[2]);
@@ -1490,6 +1804,37 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       await ack();
       await setState(env, uid, 'set_num', def);
       return show(env, chatId, msgId, `✏️ مقدار جدید «${esc(def.label)}» را بفرستید (عددی بین ${fa(def.min)} تا ${fa(def.max)}):`, cancelKb);
+    }
+    case 'sett': {
+      const def = SETTINGS_DEF.find((x) => x.key === p[2]);
+      if (!def) return ack();
+      await ack();
+      await setState(env, uid, 'set_text', def);
+      return show(env, chatId, msgId, `✏️ متن جدید «${esc(def.label)}» را بفرستید (حداکثر ${fa(def.max)} کاراکتر):`, cancelKb);
+    }
+    case 'setc': await ack(); return viewColorPicker(env, chatId, msgId, p[2]);
+    case 'setcv': {
+      const def = SETTINGS_DEF.find((x) => x.key === p[2]);
+      if (!def) return ack();
+      const v = p[3] === 'none' ? '' : p[3];
+      await setSetting(env, def.key, v);
+      await logActivity(env, uid, 'تغییر تنظیمات', `${def.label} → ${colorLabel(v)}`);
+      await ack('🎨 رنگ تغییر کرد');
+      return viewSettingsGroup(env, chatId, msgId, 'ui');
+    }
+    case 'sereset':
+      await ack();
+      return show(env, chatId, msgId, '🔄 <b>بازگشت به پیش‌فرض</b>\n\nهمه‌ی تنظیمات ظاهری و سیستمی و ایموجی دسته‌ها به حالت اولیه برمی‌گردن. مطمئنی؟',
+        kb([[sbtn('✅ بله، بازگردان', 'a:sereset_ok', 'danger')], [btn('❌ انصراف', 'a:se')]]));
+    case 'sereset_ok': {
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM settings'),
+        env.DB.prepare('UPDATE categories SET emoji=NULL'),
+        ...Object.entries(DEFAULT_SETTINGS).map(([k, v]) => env.DB.prepare('INSERT INTO settings(key,value) VALUES(?,?)').bind(k, v)),
+      ]);
+      await logActivity(env, uid, 'بازگشت تنظیمات به پیش‌فرض');
+      await ack('🔄 بازگردانده شد');
+      return viewSettings(env, chatId, msgId);
     }
 
     /* گزارش فعالیت ادمین‌ها */
@@ -1581,6 +1926,41 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       await logActivity(env, uid, 'حذف ادمین', `#${id}`);
       await ack('🗑 حذف شد');
       return admList(env, chatId, msgId, 0);
+
+    /* دسترسی‌های ماژولی و انقضای ادمین */
+    case 'amp': await ack(); return viewAdminPerms(env, chatId, msgId, id);
+    case 'ampt': {
+      const a = await env.DB.prepare('SELECT permissions FROM admins WHERE id=?').bind(id).first();
+      if (!a) return ack('⚠️ ادمین پیدا نشد.', true);
+      let perms = null; try { perms = a.permissions ? JSON.parse(a.permissions) : null; } catch { perms = null; }
+      if (perms === null) perms = MODULES.map((m) => m.key);
+      const mk = p[3];
+      perms = perms.includes(mk) ? perms.filter((x) => x !== mk) : [...perms, mk];
+      await env.DB.prepare('UPDATE admins SET permissions=? WHERE id=?').bind(JSON.stringify(perms), id).run();
+      await logActivity(env, uid, 'تغییر دسترسی ادمین', `#${id} → ${perms.join(',') || 'هیچ‌کدام'}`);
+      await ack('✅ تغییر کرد');
+      return viewAdminPerms(env, chatId, msgId, id);
+    }
+    case 'ampall':
+      await env.DB.prepare('UPDATE admins SET permissions=NULL WHERE id=?').bind(id).run();
+      await logActivity(env, uid, 'تغییر دسترسی ادمین', `#${id} → دسترسی کامل`);
+      await ack('♾ دسترسی کامل شد');
+      return viewAdminPerms(env, chatId, msgId, id);
+    case 'ampexp': await ack(); return viewAdminExpiry(env, chatId, msgId, id);
+    case 'ampexpv': {
+      const mode = p[3];
+      let exp = 0;
+      if (mode === 'today') {
+        const parts = new Intl.DateTimeFormat('en-u-ca-gregory-nu-latn', { year: 'numeric', month: 'numeric', day: 'numeric', timeZone: 'Asia/Tehran' }).formatToParts(new Date());
+        const o = {}; for (const pt of parts) o[pt.type] = pt.value;
+        exp = Math.floor((Date.UTC(+o.year, +o.month - 1, +o.day, 23, 59, 0) - TEHRAN_OFFSET_MIN * 60000) / 1000);
+      } else if (mode === '24h') exp = now() + 86400;
+      await env.DB.prepare('UPDATE admins SET expires_at=? WHERE id=?').bind(exp, id).run();
+      await logActivity(env, uid, 'تغییر انقضای دسترسی', `#${id} → ${exp ? fmtDateTime(exp) : 'همیشگی'}`);
+      await ack('⏳ ثبت شد');
+      return admDetail(env, chatId, msgId, id);
+    }
+    case 'ampexpc': return prompt('adm_expiry_custom', { id }, '✏️ عدد ساعت را بفرستید (مثلاً 12):');
 
     /* امتحانات و آزمون‌ها */
     case 'ex': await ack(); await clearState(env, uid); return examMenu(env, chatId, msgId);
@@ -1731,20 +2111,120 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       const cat = await getCat(env, id);
       if (!cat) return ack('⚠️ دسته‌بندی پیدا نشد.', true);
       await ack();
-      await setState(env, uid, 'add_tags', { ...st.data, cat: id });
-      return show(env, chatId, msgId,
-        `📂 دسته‌بندی: <b>${esc(cat.name)}</b>\n\n🏷 هشتگ‌ها را ارسال کنید.\nمثال: <code>#زیست_دهم #سلول</code>`,
-        kb([[btn('⏭ بدون هشتگ', 'a:skiptags')], [btn('❌ انصراف', 'a:cancel')]]));
+      const freqTags = await topCategoryTags(env, id);
+      const suggestions = suggestTags(cat.name, st.data.title, freqTags);
+      const data = { ...st.data, cat: id, suggestions, selected: suggestions.map((_, i) => i) };
+      await setState(env, uid, 'add_tags_pick', data);
+      return viewTagPicker(env, chatId, msgId, data);
+    }
+    case 'tgpick': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'add_tags_pick') return ack('⏱ عملیات منقضی شده است.', true);
+      const i = num(2);
+      const selected = st.data.selected.includes(i) ? st.data.selected.filter((x) => x !== i) : [...st.data.selected, i];
+      const data = { ...st.data, selected };
+      await setState(env, uid, 'add_tags_pick', data);
+      await ack();
+      return viewTagPicker(env, chatId, msgId, data);
+    }
+    case 'tgok': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'add_tags_pick') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      const tags = st.data.selected.sort((a, b) => a - b).map((i) => st.data.suggestions[i]).join(' ');
+      return finishAdd(env, chatId, uid, st.data, tags);
+    }
+    case 'tgcustom': {
+      const st = await getState(env, uid);
+      if (!st || !st.data || !st.data.file) return ack('⏱ عملیات منقضی شده است.', true);
+      await ack();
+      await setState(env, uid, 'add_tags', st.data);
+      return show(env, chatId, msgId, '✏️ هشتگ‌های دلخواه را بفرستید.\nمثال: <code>#زیست_دهم #سلول</code>', cancelKb);
     }
     case 'skiptags': {
       const st = await getState(env, uid);
-      if (!st || st.name !== 'add_tags') return ack('⏱ عملیات منقضی شده است.', true);
+      if (!st || !st.data || !st.data.file) return ack('⏱ عملیات منقضی شده است.', true);
       await ack();
       return finishAdd(env, chatId, uid, st.data, '');
     }
 
     /* مدیریت جزوه‌ها */
-    case 'nl': await ack(); return adminNotes(env, chatId, msgId, id);
+    case 'nl': await ack(); await clearState(env, uid); return adminNotes(env, chatId, msgId, uid, id);
+    case 'nq': return prompt('admin_note_search', {}, '🔎 عبارت جستجو در عنوان یا هشتگ را بفرستید:');
+    case 'nlq': {
+      await ack();
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'admin_search_res') return adminNotes(env, chatId, msgId, uid, 0);
+      return adminNotes(env, chatId, msgId, uid, id, { q: st.data.q });
+    }
+    case 'nqc': {
+      await ack();
+      const { results } = await env.DB.prepare('SELECT id,name,emoji FROM categories ORDER BY id').all();
+      const rows = [];
+      for (let i = 0; i < results.length; i += 2) rows.push(results.slice(i, i + 2).map((c) => btn(`${catIcon(c)} ${c.name}`, `a:nlc:${c.id}:0`)));
+      rows.push([btn('🔙 بازگشت', 'a:nl:0')]);
+      return show(env, chatId, msgId, '📂 دسته‌بندی را برای فیلتر انتخاب کنید:', kb(rows));
+    }
+    case 'nlc': await ack(); return adminNotes(env, chatId, msgId, uid, num(3), { catId: num(2) });
+
+    /* انتخاب چندتایی و عملیات دسته‌جمعی */
+    case 'bstart': await ack(); await setState(env, uid, 'bulk_select', { ids: [] }); return adminNotes(env, chatId, msgId, uid, id);
+    case 'bsel': {
+      const nid = num(2), page = num(3);
+      const st = await getState(env, uid);
+      const data = st && st.name === 'bulk_select' ? st.data : { ids: [] };
+      data.ids = data.ids.includes(nid) ? data.ids.filter((x) => x !== nid) : [...data.ids, nid];
+      await setState(env, uid, 'bulk_select', data);
+      await ack();
+      return adminNotes(env, chatId, msgId, uid, page);
+    }
+    case 'bcancel': await ack(); await clearState(env, uid); return adminNotes(env, chatId, msgId, uid, 0);
+    case 'bdel': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'bulk_select' || !st.data.ids.length) return ack('⚠️ چیزی انتخاب نشده.', true);
+      await ack();
+      return show(env, chatId, msgId, `🗑 ${fa(st.data.ids.length)} جزوه حذف بشه؟ فایل و پیام کانال هم حذف می‌شن.`,
+        kb([[sbtn('✅ بله، حذف کن', 'a:bdelok', 'danger')], [btn('🔙 انصراف', 'a:bcancel')]]));
+    }
+    case 'bdelok': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'bulk_select') return ack('⏱ عملیات منقضی شده است.', true);
+      await ack('🗑 در حال حذف...');
+      for (const nid of st.data.ids) {
+        const n = await getNote(env, nid);
+        if (n) {
+          if (n.channel_message_id) await tg(env, 'deleteMessage', { chat_id: env.CHANNEL_ID, message_id: n.channel_message_id });
+          await env.DB.prepare('DELETE FROM notes WHERE id=?').bind(nid).run();
+        }
+      }
+      await logActivity(env, uid, 'حذف دسته‌جمعی جزوه‌ها', `${fa(st.data.ids.length)} جزوه`);
+      await clearState(env, uid);
+      return adminNotes(env, chatId, msgId, uid, 0);
+    }
+    case 'bmove': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'bulk_select' || !st.data.ids.length) return ack('⚠️ چیزی انتخاب نشده.', true);
+      await ack();
+      const { results } = await env.DB.prepare('SELECT id,name,emoji FROM categories ORDER BY id').all();
+      const rows = [];
+      for (let i = 0; i < results.length; i += 2) rows.push(results.slice(i, i + 2).map((c) => btn(`${catIcon(c)} ${c.name}`, `a:bmoveto:${c.id}`)));
+      rows.push([btn('🔙 انصراف', 'a:bcancel')]);
+      return show(env, chatId, msgId, `📂 ${fa(st.data.ids.length)} جزوه به کدوم دسته منتقل بشه؟`, kb(rows));
+    }
+    case 'bmoveto': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'bulk_select' || !st.data.ids.length) return ack('⚠️ چیزی انتخاب نشده.', true);
+      const cat = await getCat(env, id);
+      if (!cat) return ack('⚠️ دسته پیدا نشد.', true);
+      await ack('📂 در حال انتقال...');
+      for (const nid of st.data.ids) {
+        await env.DB.prepare('UPDATE notes SET category_id=?,updated_at=? WHERE id=?').bind(cat.id, now(), nid).run();
+        await syncNoteAnnouncement(env, nid);
+      }
+      await logActivity(env, uid, 'انتقال دسته‌جمعی جزوه‌ها', `${fa(st.data.ids.length)} جزوه → ${cat.name}`);
+      await clearState(env, uid);
+      return adminNotes(env, chatId, msgId, uid, 0);
+    }
     case 'n': await ack(); await clearState(env, uid); return adminNote(env, chatId, msgId, id, num(3));
     case 'rn': return prompt('rename', { id }, '✏️ نام جدید جزوه را ارسال کنید:');
     case 'rh': return prompt('retag', { id }, '🏷 هشتگ‌های جدید را ارسال کنید:');
@@ -1772,7 +2252,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
     case 'del': {
       await ack();
       const n = await getNote(env, id);
-      if (!n) return adminNotes(env, chatId, msgId, 0);
+      if (!n) return adminNotes(env, chatId, msgId, uid, 0);
       return show(env, chatId, msgId, `🗑 آیا از حذف «<b>${esc(n.title)}</b>» مطمئن هستید؟\nفایل و پیام کانال هم حذف می‌شوند.`,
         kb([[btn('✅ بله، حذف شود', `a:delok:${id}`)], [btn('🔙 انصراف', `a:n:${id}:0`)]]));
     }
@@ -1784,7 +2264,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
         await logActivity(env, uid, 'حذف جزوه', `${n.title} (#${id})`);
       }
       await ack('🗑 حذف شد');
-      return adminNotes(env, chatId, msgId, 0);
+      return adminNotes(env, chatId, msgId, uid, 0);
     }
 
     /* آپدیت (جایگزینی) جزوه‌ی موجود با فایل جدید */
@@ -1882,15 +2362,9 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
     /* مدیریت دسته‌بندی‌ها */
     case 'cl': await ack(); await clearState(env, uid); return adminCats(env, chatId, msgId);
     case 'ca': return prompt('cat_add', {}, '➕ نام دسته‌بندی جدید را ارسال کنید:');
-    case 'c': {
-      await ack();
-      const cat = await getCat(env, id);
-      if (!cat) return adminCats(env, chatId, msgId);
-      const cnt = (await env.DB.prepare('SELECT COUNT(*) AS c FROM notes WHERE category_id=?').bind(id).first()).c;
-      return show(env, chatId, msgId, `${icon(cat.name)} <b>${esc(cat.name)}</b>\n\n📄 تعداد جزوه‌ها: ${fa(cnt)}`,
-        kb([[btn('✏️ تغییر نام', `a:cr:${id}`), btn('🗑 حذف', `a:cd:${id}`)], [btn('🔙 بازگشت', 'a:cl')]]));
-    }
+    case 'c': await ack(); return adminCatDetail(env, chatId, msgId, id);
     case 'cr': return prompt('cat_ren', { id }, '✏️ نام جدید دسته‌بندی را ارسال کنید:');
+    case 'ce': return prompt('cat_emoji', { id }, '🎨 یک ایموجی برای این دسته بفرستید (مثلاً 🧬):');
     case 'cd': {
       const cat = await getCat(env, id);
       if (!cat) return ack('⚠️ دسته‌بندی پیدا نشد.', true);
@@ -1911,6 +2385,31 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
 }
 
 /* ───────────── کرون (بررسی دوره‌ای امتحانات) ───────────── */
+async function sendExamReminders(env, t) {
+  if ((await getSetting(env, 'exam_reminder_enabled')) === '0') return;
+  const targetHour = parseInt(await getSetting(env, 'exam_reminder_hour'), 10) || 18;
+  let hour = 0;
+  try { hour = parseInt(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Asia/Tehran' }).format(new Date(t * 1000)), 10); } catch {}
+  if (hour !== targetHour) return; // فقط نزدیک ساعت تنظیم‌شده اجرا شود
+  const OFF = TEHRAN_OFFSET_MIN * 60;
+  const todayIdx = Math.floor((t + OFF) / 86400);
+  const tomorrowStart = (todayIdx + 1) * 86400 - OFF;
+  const tomorrowEnd = tomorrowStart + 86400;
+  const { results } = await env.DB.prepare(
+    "SELECT id,title,exam_at FROM exams WHERE status='published' AND reminder_sent=0 AND exam_at>=? AND exam_at<?"
+  ).bind(tomorrowStart, tomorrowEnd).all();
+  if (!results.length) return;
+  for (const ex of results) {
+    let weekday = '';
+    try { weekday = new Intl.DateTimeFormat('fa-IR', { weekday: 'long', timeZone: 'Asia/Tehran' }).format(new Date(ex.exam_at * 1000)); } catch {}
+    await tg(env, 'sendMessage', {
+      chat_id: env.CHANNEL_ID,
+      parse_mode: 'HTML',
+      text: `🔔 <b>یادآوری امتحان</b>\n📌 ${esc(ex.title)}\n🗓 فردا، ${esc(weekday)}`,
+    });
+    await env.DB.prepare('UPDATE exams SET reminder_sent=1 WHERE id=?').bind(ex.id).run();
+  }
+}
 async function runCron(env) {
   const t = now();
   const [toPublish, toConfirm] = await Promise.all([
@@ -1925,6 +2424,7 @@ async function runCron(env) {
   }
   await renderBoard(env);
   await checkFilesHealth(env);
+  await sendExamReminders(env, t);
   if (toConfirm.results.length) {
     const admins = await env.DB.prepare('SELECT user_id FROM admin_sessions WHERE expires_at>?').bind(t).all();
     for (const a of admins.results) {
@@ -1932,7 +2432,7 @@ async function runCron(env) {
         await tg(env, 'sendMessage', {
           chat_id: a.user_id,
           parse_mode: 'HTML',
-          text: `⏳ <b>نیاز به تایید نتیجه</b>\n\n📌 ${esc(ex.title)}\n🗓 ${fmtJalali(ex.exam_at)}\n\nاین امتحان چی شد؟`,
+          text: `⏳ <b>نیاز به تایید نتیجه</b>\n\n📌 ${esc(ex.title)}\n🗓 ${fmtExamDate(ex.exam_at)}\n\nاین امتحان چی شد؟`,
           reply_markup: kb([
             [btn('✅ برگزار شد', `a:cf:held:${ex.id}`)],
             [btn('🔄 تاریخ عوض شد', `a:cf:resch:${ex.id}`)],
