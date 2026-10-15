@@ -43,6 +43,7 @@ const DEFAULT_SETTINGS = {
   broadcast_delay_ms: '1100',
   exam_reminder_enabled: '1',
   exam_reminder_hour: '18',
+  exam_notify_enabled: '1',
   ui_title: '📚 کتابخانه جزوه',
   ui_greeting: 'سلام {name} 👋',
   ui_color_cat: 'primary',
@@ -94,6 +95,7 @@ const SETTINGS_DEF = [
   { key: 'card_announce_enabled', type: 'bool', label: 'قالب کارتی اعلان کانال', group: 'sys' },
   { key: 'board_countdown_enabled', type: 'bool', label: 'شمارش‌معکوس تابلوی امتحانات', group: 'sys' },
   { key: 'exam_reminder_enabled', type: 'bool', label: 'یادآور «فردا امتحان داری» در کانال', group: 'sys' },
+  { key: 'exam_notify_enabled', type: 'bool', label: 'پرسیدن «اعلام در کانال؟» هنگام ثبت/تغییر امتحان', group: 'sys' },
   { key: 'exam_reminder_hour', type: 'num', label: 'ساعت ارسال یادآور (۰ تا ۲۳)', min: 0, max: 23, group: 'sys' },
   { key: 'duplicate_check_enabled', type: 'bool', label: 'تشخیص آپلود تکراری', group: 'sys' },
   { key: 'corrupt_check_enabled', type: 'bool', label: 'بررسی خودکار فایل خراب', group: 'sys' },
@@ -333,6 +335,7 @@ async function initDb(db) {
     try { await db.prepare(`ALTER TABLE admins ADD COLUMN ${col}`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
   }
   try { await db.prepare(`ALTER TABLE exams ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
+  try { await db.prepare(`ALTER TABLE exams ADD COLUMN announce_on_publish INTEGER NOT NULL DEFAULT 0`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
   try { await db.prepare(`ALTER TABLE notes ADD COLUMN reactions INTEGER NOT NULL DEFAULT 0`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
   try { await db.prepare(`ALTER TABLE notes ADD COLUMN admin_note TEXT`).run(); } catch (e) { /* ستون از قبل وجود دارد */ }
   const seeded = await db.prepare(`SELECT 1 AS x FROM states WHERE user_id='meta:seeded'`).first();
@@ -375,17 +378,17 @@ const MODULES = [
 const MODULE_PREFIXES = {
   notes: ['add', 'ac', 'skiptags', 'tgpick', 'tgok', 'tgcustom', 'ac_force', 'rf_force', 'nl', 'n', 'rn', 'rh', 'rf', 'rc', 'sc', 'gt', 'del', 'delok', 'nd', 'up', 'ubk', 'uc', 'ul', 'us', 'uv', 'ut', 'uh', 'uk', 'usc', 'uok', 'nq', 'nlq', 'nlc', 'nqc', 'anote', 'bstart', 'bsel', 'bdel', 'bdelok', 'bmove', 'bmoveto', 'bcancel'],
   cats: ['cl', 'ca', 'c', 'cr', 'ce', 'cd', 'cdok'],
-  exams: ['ex', 'ea', 'easn', 'eapn', 'eapl', 'el', 'ed', 'et', 'edt', 'en', 'epd', 'xcm', 'xcd', 'xct', 'xctm', 'ec', 'ecok', 'edel', 'edelok', 'cf'],
+  exams: ['ex', 'ea', 'easn', 'eapn', 'eapl', 'el', 'ed', 'et', 'edt', 'en', 'epd', 'xcm', 'xcd', 'xct', 'xctm', 'ec', 'ecok', 'edel', 'edelok', 'cf', 'enf'],
   stats: ['st', 'ux', 'ovcal'],
   broadcast: ['bc', 'bcok'],
   channel_post: ['cp', 'cptpl', 'cpadd', 'cpbtncolor', 'cpcancelbtn', 'cppin', 'cpsched', 'cpsend', 'cpcancel', 'cph', 'cphd', 'cphdelok', 'pl'],
   audit_log: ['al', 'alp', 'alrank'],
-  settings: ['se', 'seui', 'sesys', 'setg', 'setn', 'sett', 'setc', 'setcv', 'sereset', 'sereset_ok', 'sestat', 'seerr', 'seerrp', 'sebkup'],
+  settings: ['se', 'seui', 'sesys', 'setg', 'setn', 'sett', 'setc', 'setcv', 'sereset', 'sereset_ok', 'sestat', 'seerr', 'seerrp', 'sebkup', 'setheme', 'setthemev'],
 };
 const prefixModule = (p1) => Object.keys(MODULE_PREFIXES).find((mod) => MODULE_PREFIXES[mod].includes(p1)) || null;
 // پایه (جزوه/دسته/امتحان/آمار): نبودِ لیست مجوز یعنی دسترسی کامل.
 // پیشرفته (پیام همگانی/پست کانال/گزارش/تنظیمات): فقط با اعطای صریح اونر فعال می‌شود.
-const hasPerm = (perms, mod) => (ADVANCED_MODULES.includes(mod) ? Array.isArray(perms) && perms.includes(mod) : !perms || perms.includes(mod));
+const hasPerm = (perms, mod, role) => role === 'owner' || (ADVANCED_MODULES.includes(mod) ? Array.isArray(perms) && perms.includes(mod) : !perms || perms.includes(mod));
 function permsLabel(perms) {
   const allKeys = MODULES.map((m) => m.key);
   if (perms === null) return 'پایه کامل (بدون دسترسی‌های پیشرفته)';
@@ -411,7 +414,8 @@ async function getSessionInfo(env, uid) {
     try { perms = a.permissions ? JSON.parse(a.permissions) : null; } catch { perms = null; }
     return { role: 'admin', adminId: sess.admin_id, perms };
   }
-  return { role: 'owner', adminId: 0, perms: null };
+  // اونر همیشه به همه‌ی ماژول‌ها (پایه + پیشرفته) دسترسی کامل دارد.
+  return { role: 'owner', adminId: 0, perms: MODULES.map((m) => m.key) };
 }
 async function getRole(env, uid) {
   const s = await getSessionInfo(env, uid);
@@ -722,25 +726,25 @@ async function viewPanel(env, chatId, msgId) {
   const perms = sessInfo ? sessInfo.perms : null;
   const ac = await getSetting(env, 'ui_color_admin');
   const rows = [];
-  if (hasPerm(perms, 'notes')) {
+  if (hasPerm(perms, 'notes', role)) {
     rows.push([sbtn('➕ افزودن جزوه', 'a:add', 'success')]);
     rows.push([sbtn('📚 مدیریت جزوه‌ها', 'a:nl:0', ac), sbtn('🔎 جستجو', 'a:nq', ac)]);
   }
-  if (hasPerm(perms, 'cats')) rows.push([sbtn('📂 مدیریت دسته‌بندی‌ها', 'a:cl', ac)]);
-  if (hasPerm(perms, 'exams')) rows.push([sbtn('🗓 امتحانات و آزمون‌ها', 'a:ex', ac)]);
-  if (hasPerm(perms, 'stats')) {
+  if (hasPerm(perms, 'cats', role)) rows.push([sbtn('📂 مدیریت دسته‌بندی‌ها', 'a:cl', ac)]);
+  if (hasPerm(perms, 'exams', role)) rows.push([sbtn('🗓 امتحانات و آزمون‌ها', 'a:ex', ac)]);
+  if (hasPerm(perms, 'stats', role)) {
     rows.push([sbtn('📊 آمار', 'a:st', ac)]);
     const { jy, jm } = todayJalali();
     rows.push([sbtn('📅 نمای این ماه', `a:ovcal:${jy}:${jm}`, ac)]);
   }
   const advRow1 = [];
-  if (hasPerm(perms, 'broadcast')) advRow1.push(sbtn('📣 پیام همگانی', 'a:bc', ac));
-  if (hasPerm(perms, 'channel_post')) advRow1.push(sbtn('📢 پست کانال سفارشی', 'a:cp', ac));
+  if (hasPerm(perms, 'broadcast', role)) advRow1.push(sbtn('📣 پیام همگانی', 'a:bc', ac));
+  if (hasPerm(perms, 'channel_post', role)) advRow1.push(sbtn('📢 پست کانال سفارشی', 'a:cp', ac));
   if (advRow1.length) rows.push(advRow1);
-  if (hasPerm(perms, 'channel_post')) rows.push([sbtn('🗳 نظرسنجی سریع', 'a:pl', ac), sbtn('📋 پست‌های کانال', 'a:cph:0', ac)]);
+  if (hasPerm(perms, 'channel_post', role)) rows.push([sbtn('🗳 نظرسنجی سریع', 'a:pl', ac), sbtn('📋 پست‌های کانال', 'a:cph:0', ac)]);
   const advRow2 = [];
-  if (hasPerm(perms, 'audit_log')) { advRow2.push(sbtn('📋 گزارش فعالیت‌ها', 'a:al:0', ac)); advRow2.push(sbtn('🏆 رتبه‌بندی', 'a:alrank', ac)); }
-  if (hasPerm(perms, 'settings')) advRow2.push(sbtn('⚙️ تنظیمات', 'a:se', ac));
+  if (hasPerm(perms, 'audit_log', role)) { advRow2.push(sbtn('📋 گزارش فعالیت‌ها', 'a:al:0', ac)); advRow2.push(sbtn('🏆 رتبه‌بندی', 'a:alrank', ac)); }
+  if (hasPerm(perms, 'settings', role)) advRow2.push(sbtn('⚙️ تنظیمات', 'a:se', ac));
   if (advRow2.length) rows.push(advRow2);
   if (role === 'owner') rows.push([btn('👥 مدیریت ادمین‌ها', 'a:am')]);
   rows.push([btn('📊 فعالیت من', 'a:myact')]);
@@ -1051,6 +1055,47 @@ async function renderBoard(env) {
   } else console.error('renderBoard send failed', r2.description);
 }
 
+/* ───────────── اعلان اختیاری امتحان‌ها در کانال ───────────── */
+function fmtExamDateTime(ts) {
+  let tm = '';
+  try { tm = new Intl.DateTimeFormat('fa-IR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Tehran' }).format(new Date(ts * 1000)); } catch {}
+  return fmtExamDate(ts) + (tm ? ` — ساعت ${tm}` : '');
+}
+const examNewNavKb = kb([[btn('➕ افزودن امتحان دیگر', 'a:ea')], [btn('🗓 امتحانات و آزمون‌ها', 'a:ex')], [btn('🛠 پنل مدیریت', 'a:panel')]]);
+async function sendExamAnnouncement(env, d) {
+  const e = await env.DB.prepare('SELECT * FROM exams WHERE id=?').bind(d.id).first();
+  if (!e) return { ok: false };
+  const T = esc(e.title);
+  let text;
+  if (d.kind === 'new') {
+    text = `🆕 <b>امتحان/آزمون جدید اضافه شد</b>\n\n📌 ${T}\n🗓 ${fmtExamDateTime(e.exam_at)}` + (e.note ? `\n📝 <b>توضیحات / بودجه:</b> ${esc(e.note)}` : '');
+  } else if (d.kind === 'date') {
+    text = `🔄 <b>تغییر زمان امتحان</b>\n\n📌 ${T}\n❌ زمان قبلی: ${d.old ? fmtExamDateTime(d.old) : '—'}\n✅ زمان جدید: ${fmtExamDateTime(e.exam_at)}`;
+  } else if (d.kind === 'note') {
+    text = `📝 <b>تغییر توضیحات / بودجه امتحان</b>\n\n📌 ${T}\n🗓 ${fmtExamDateTime(e.exam_at)}\n\n` +
+      (d.old ? `❌ قبلی: ${esc(d.old)}\n` : '') + (e.note ? `✅ جدید: ${esc(e.note)}` : '✅ توضیحات حذف شد.');
+  } else if (d.kind === 'title') {
+    text = `✏️ <b>تغییر عنوان امتحان</b>\n\n❌ قبلی: ${esc(d.old || '')}\n✅ جدید: ${T}\n🗓 ${fmtExamDateTime(e.exam_at)}`;
+  } else if (d.kind === 'cancel') {
+    text = `🚫 <b>امتحان لغو شد</b>\n\n📌 ${T}\n🗓 ${fmtExamDateTime(e.exam_at)}`;
+  } else return { ok: false };
+  const body = { chat_id: env.CHANNEL_ID, parse_mode: 'HTML', text };
+  const link = await boardLink(env);
+  if (link) body.reply_markup = kb([[curlBtn('🕶 مشاهده تابلوی امتحانات', link, await getSetting(env, 'ui_color_channel'))]]);
+  const r = await tg(env, 'sendMessage', body);
+  if (!r.ok) console.error('sendExamAnnouncement failed', r.description);
+  return { ok: !!r.ok, title: e.title };
+}
+// بعد از هر تغییر امتحان: اگر امتحان روی تابلو دیده می‌شود و قابلیت فعال است، از ادمین می‌پرسد خبرش در کانال برود یا نه.
+async function afterExamChange(env, chatId, msgId, uid, id, payload, visible) {
+  if (!visible || (await getSetting(env, 'exam_notify_enabled')) === '0') return examDetail(env, chatId, msgId, id);
+  await setState(env, uid, 'exam_notify', { ...payload, id });
+  const label = { date: 'تغییر تاریخ/ساعت', note: 'تغییر توضیحات/بودجه', title: 'تغییر عنوان', cancel: 'لغو امتحان' }[payload.kind] || 'این تغییر';
+  return show(env, chatId, msgId,
+    `✅ ذخیره شد و تابلوی کانال به‌روز شد.\n\n📣 <b>${label}</b> در کانال هم اعلام بشود؟\n<i>اختیاری است؛ اگر «نه» بزنید فقط تابلو آپدیت می‌ماند.</i>`,
+    kb([[btn('📢 بله، در کانال اعلام کن', 'a:enf:y')], [btn('🔕 نه، فقط ذخیره', 'a:enf:n')]]));
+}
+
 const examCancelKb = kb([[btn('❌ انصراف', 'a:cancel')]]);
 const JALALI_MONTHS = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
 const JALALI_WEEKDAYS = ['ش', 'ی', 'د', 'س', 'چ', 'پ', 'ج'];
@@ -1135,29 +1180,37 @@ async function proceedWithDate(env, chatId, msgId, uid, st, ts) {
   switch (st.name) {
     case 'exam_date':
       await setState(env, uid, 'exam_note', { ...d, exam_at: ts });
-      return show(env, chatId, msgId, '📝 توضیح اختیاری (مثلاً بخش یا سرفصل امتحان) را ارسال کنید:', kb([[btn('⏭ رد کن', 'a:easn')], [btn('❌ انصراف', 'a:cancel')]]));
+      return show(env, chatId, msgId, '📝 توضیح / بودجه‌بندی اختیاری (مثلاً فصل‌ها و سرفصل‌های امتحان) را ارسال کنید:', kb([[btn('⏭ رد کن', 'a:easn')], [btn('❌ انصراف', 'a:cancel')]]));
     case 'exam_pubdate':
       await clearState(env, uid);
       return finalizeExam(env, chatId, uid, d, ts);
     case 'exam_edit_date': {
-      const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
+      const e = await env.DB.prepare('SELECT status,exam_at FROM exams WHERE id=?').bind(d.id).first();
       await env.DB.prepare('UPDATE exams SET exam_at=?,confirm_pending=0,reminder_sent=0,updated_at=? WHERE id=?').bind(ts, now(), d.id).run();
       await clearState(env, uid);
       if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
-      return examDetail(env, chatId, msgId, d.id);
+      return afterExamChange(env, chatId, msgId, uid, d.id, { kind: 'date', old: e ? e.exam_at : 0 }, !!e && e.status === 'published');
     }
     case 'exam_edit_pubdate': {
       const status = ts <= now() ? 'published' : 'scheduled';
       await env.DB.prepare('UPDATE exams SET publish_at=?,status=?,updated_at=? WHERE id=?').bind(ts, status, now(), d.id).run();
       await clearState(env, uid);
-      if (status === 'published') await renderBoard(env);
+      if (status === 'published') {
+        await renderBoard(env);
+        const ex = await env.DB.prepare('SELECT announce_on_publish FROM exams WHERE id=?').bind(d.id).first();
+        if (ex && ex.announce_on_publish) {
+          await sendExamAnnouncement(env, { kind: 'new', id: d.id });
+          await env.DB.prepare('UPDATE exams SET announce_on_publish=0 WHERE id=?').bind(d.id).run();
+        }
+      }
       return examDetail(env, chatId, msgId, d.id);
     }
     case 'exam_reschedule': {
+      const old = await env.DB.prepare('SELECT exam_at FROM exams WHERE id=?').bind(d.id).first();
       await env.DB.prepare("UPDATE exams SET exam_at=?,confirm_pending=0,status='published',reminder_sent=0,updated_at=? WHERE id=?").bind(ts, now(), d.id).run();
       await clearState(env, uid);
       await renderBoard(env);
-      return examDetail(env, chatId, msgId, d.id);
+      return afterExamChange(env, chatId, msgId, uid, d.id, { kind: 'date', old: old ? old.exam_at : 0 }, true);
     }
   }
 }
@@ -1165,18 +1218,26 @@ async function proceedWithDate(env, chatId, msgId, uid, st, ts) {
 async function finalizeExam(env, chatId, uid, d, publishAt) {
   const t = now();
   const status = publishAt <= t ? 'published' : 'scheduled';
-  await env.DB.prepare(
+  const ins = await env.DB.prepare(
     'INSERT INTO exams(title,note,exam_at,publish_at,status,confirm_pending,created_at,updated_at) VALUES(?,?,?,?,?,0,?,?)'
   ).bind(d.title, d.note || '', d.exam_at, publishAt, status, t, t).run();
+  const newId = ins && ins.meta ? ins.meta.last_row_id : null;
   await clearState(env, uid);
   if (status === 'published') await renderBoard(env);
   await logActivity(env, uid, 'افزودن امتحان', `${d.title} — ${fmtExamDate(d.exam_at)}`);
   const when = status === 'published'
     ? 'از همین الان توی تابلوی کانال نمایش داده می‌شود.'
     : `از تاریخ ${fmtExamDate(publishAt)} توی تابلوی کانال نمایش داده می‌شود.`;
-  return sendText(env, chatId,
-    `✅ <b>امتحان ثبت شد</b>\n\n📌 ${esc(d.title)}\n🗓 ${fmtExamDate(d.exam_at)}` + (d.note ? `\n📝 ${esc(d.note)}` : '') + `\n\n📢 ${when}`,
-    kb([[btn('➕ افزودن امتحان دیگر', 'a:ea')], [btn('🗓 امتحانات و آزمون‌ها', 'a:ex')], [btn('🛠 پنل مدیریت', 'a:panel')]]));
+  const text = `✅ <b>امتحان ثبت شد</b>\n\n📌 ${esc(d.title)}\n🗓 ${fmtExamDate(d.exam_at)}` + (d.note ? `\n📝 ${esc(d.note)}` : '') + `\n\n📢 ${when}`;
+  if (newId && (await getSetting(env, 'exam_notify_enabled')) !== '0') {
+    await setState(env, uid, 'exam_notify', { kind: 'new', id: newId, text });
+    const ask = status === 'published'
+      ? '📣 خبر این امتحان در کانال هم اعلام بشود؟'
+      : '📣 خبر این امتحان هم‌زمان با انتشارش در کانال اعلام بشود؟';
+    return sendText(env, chatId, `${text}\n\n${ask}\n<i>اختیاری است.</i>`,
+      kb([[btn(status === 'published' ? '📢 بله، اعلام کن' : '📢 بله، موقع انتشار اعلام کن', 'a:enf:y')], [btn('🔕 نه، اعلام نشود', 'a:enf:n')]]));
+  }
+  return sendText(env, chatId, text, examNewNavKb);
 }
 
 async function examMenu(env, chatId, msgId) {
@@ -1227,7 +1288,7 @@ async function examDetail(env, chatId, msgId, id) {
     rows.push([btn('❌ برگزار نشد', `a:cf:no:${id}`)]);
   } else if (e.status !== 'cancelled' && e.status !== 'held') {
     rows.push([btn('✏️ تغییر عنوان', `a:et:${id}`), btn('🗓 تغییر تاریخ', `a:edt:${id}`)]);
-    rows.push([btn('📝 تغییر توضیح', `a:en:${id}`)]);
+    rows.push([btn('📝 توضیح / بودجه‌بندی', `a:en:${id}`)]);
     if (e.status === 'scheduled') rows.push([btn('🚀 تغییر زمان انتشار', `a:epd:${id}`)]);
     rows.push([btn('🚫 لغو امتحان', `a:ec:${id}`)]);
   }
@@ -1883,19 +1944,19 @@ async function onAdminState(env, m, uid, st, text) {
     case 'exam_edit_title': {
       const title = trunc(norm(text), 150);
       if (!title) return sendText(env, chatId, '⚠️ عنوان معتبر ارسال کنید.', examCancelKb);
-      const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
+      const e = await env.DB.prepare('SELECT status,title FROM exams WHERE id=?').bind(d.id).first();
       await env.DB.prepare('UPDATE exams SET title=?,updated_at=? WHERE id=?').bind(title, now(), d.id).run();
       await clearState(env, uid);
       if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
-      return examDetail(env, chatId, null, d.id);
+      return afterExamChange(env, chatId, null, uid, d.id, { kind: 'title', old: e ? e.title : '' }, !!e && e.status === 'published');
     }
     case 'exam_edit_note': {
       const note = text.trim() === '-' ? '' : trunc(norm(text), 300);
-      const e = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
+      const e = await env.DB.prepare('SELECT status,note FROM exams WHERE id=?').bind(d.id).first();
       await env.DB.prepare('UPDATE exams SET note=?,updated_at=? WHERE id=?').bind(note, now(), d.id).run();
       await clearState(env, uid);
       if (e && (e.status === 'published' || e.status === 'held')) await renderBoard(env);
-      return examDetail(env, chatId, null, d.id);
+      return afterExamChange(env, chatId, null, uid, d.id, { kind: 'note', old: e ? e.note : '' }, !!e && e.status === 'published');
     }
     case 'set_num': {
       const v = parseInt(digits(text).replace(/[^\d-]/g, ''), 10);
@@ -2055,7 +2116,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
   // پیشرفته (تنظیمات، پیام همگانی، پست کانال، گزارش فعالیت) از طریق سیستم مجوز ماژولی زیر کنترل می‌شوند.
   if (p[1].startsWith('am') && role !== 'owner') return ack('⛔ فقط مدیر اصلی به این بخش دسترسی دارد.', true);
   const mod = prefixModule(p[1]);
-  if (mod && role === 'admin' && !hasPerm(sessInfo.perms, mod)) return ack('⛔ شما به این بخش دسترسی ندارید.', true);
+  if (mod && role === 'admin' && !hasPerm(sessInfo.perms, mod, role)) return ack('⛔ شما به این بخش دسترسی ندارید.', true);
   const prompt = async (state, data, text) => {
     await ack();
     await setState(env, uid, state, data);
@@ -2379,7 +2440,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
       await setState(env, uid, 'exam_edit_date', { id });
       return showDatePicker(env, chatId, msgId, 'exam_edit_date');
     }
-    case 'en': return prompt('exam_edit_note', { id }, '📝 توضیح جدید را ارسال کنید.\nبرای حذف توضیح، فقط <code>-</code> بفرستید.');
+    case 'en': return prompt('exam_edit_note', { id }, '📝 توضیح / بودجه‌بندی جدید را ارسال کنید.\nبرای حذف توضیح، فقط <code>-</code> بفرستید.');
     case 'epd': {
       await ack();
       await setState(env, uid, 'exam_edit_pubdate', { id });
@@ -2423,10 +2484,36 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
         kb([[btn('✅ بله، لغو کن', `a:ecok:${id}`)], [btn('🔙 انصراف', `a:ed:${id}`)]]));
     }
     case 'ecok': {
+      const prev = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(id).first();
       await env.DB.prepare("UPDATE exams SET status='cancelled',confirm_pending=0,updated_at=? WHERE id=?").bind(now(), id).run();
       await renderBoard(env);
       await ack('🚫 لغو شد');
-      return examDetail(env, chatId, msgId, id);
+      return afterExamChange(env, chatId, msgId, uid, id, { kind: 'cancel' }, !!prev && prev.status === 'published');
+    }
+    case 'enf': {
+      const st = await getState(env, uid);
+      if (!st || st.name !== 'exam_notify') return ack('⏱ عملیات منقضی شده است.', true);
+      const d = st.data;
+      await clearState(env, uid);
+      let note = '🔕 بدون اعلان در کانال ذخیره شد.';
+      let alertIt = false;
+      if (p[2] === 'y') {
+        const ex = await env.DB.prepare('SELECT status FROM exams WHERE id=?').bind(d.id).first();
+        if (!ex) return ack('⚠️ امتحان پیدا نشد.', true);
+        if (d.kind === 'new' && ex.status === 'scheduled') {
+          await env.DB.prepare('UPDATE exams SET announce_on_publish=1 WHERE id=?').bind(d.id).run();
+          note = '📢 هم‌زمان با انتشار تابلو، در کانال هم اعلام می‌شود.';
+        } else {
+          const r = await sendExamAnnouncement(env, d);
+          if (r.ok) {
+            note = '📢 در کانال اعلام شد.';
+            await logActivity(env, uid, 'اعلان امتحان در کانال', `${r.title} (${d.kind})`);
+          } else { note = '⚠️ ارسال اعلان به کانال ناموفق بود (دسترسی ربات به کانال را چک کنید).'; alertIt = true; }
+        }
+      }
+      await ack(note, alertIt);
+      if (d.kind === 'new' && d.text) return show(env, chatId, msgId, `${d.text}\n\n${note}`, examNewNavKb);
+      return examDetail(env, chatId, msgId, d.id);
     }
     case 'edel': {
       await ack();
@@ -2459,7 +2546,7 @@ async function adminRoute(env, p, num, chatId, msgId, uid, ack) {
         await env.DB.prepare("UPDATE exams SET status='cancelled',confirm_pending=0,updated_at=? WHERE id=?").bind(now(), exId).run();
         await renderBoard(env);
         await ack('❌ به‌عنوان لغوشده ثبت شد');
-        return examDetail(env, chatId, msgId, exId);
+        return afterExamChange(env, chatId, msgId, uid, exId, { kind: 'cancel' }, e.status === 'published');
       }
       if (action === 'resch') {
         await ack();
@@ -2853,7 +2940,7 @@ async function weeklyAutoBackup(env, t) {
 async function runCron(env) {
   const t = now();
   const [toPublish, toConfirm] = await Promise.all([
-    env.DB.prepare("SELECT id FROM exams WHERE status='scheduled' AND publish_at<=?").bind(t).all(),
+    env.DB.prepare("SELECT id,announce_on_publish FROM exams WHERE status='scheduled' AND publish_at<=?").bind(t).all(),
     env.DB.prepare("SELECT id,title,exam_at FROM exams WHERE status='published' AND confirm_pending=0 AND exam_at<=?").bind(t).all(),
   ]);
   if (toPublish.results.length) {
@@ -2863,6 +2950,11 @@ async function runCron(env) {
     await env.DB.batch(toConfirm.results.map((r) => env.DB.prepare('UPDATE exams SET confirm_pending=1,updated_at=? WHERE id=?').bind(t, r.id)));
   }
   await renderBoard(env);
+  for (const r of toPublish.results) {
+    if (!r.announce_on_publish) continue;
+    try { await sendExamAnnouncement(env, { kind: 'new', id: r.id }); } catch (e) { console.error('announce on publish failed', e); }
+    await env.DB.prepare('UPDATE exams SET announce_on_publish=0 WHERE id=?').bind(r.id).run();
+  }
   await checkFilesHealth(env);
   await sendExamReminders(env, t);
   await sendScheduledPosts(env, t);
